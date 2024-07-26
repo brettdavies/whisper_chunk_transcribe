@@ -1,0 +1,9 @@
+// {
+//     "jupyter.jupyterServerType": "remote",
+//     "jupyter.remoteServer.uri": "http://bigdaddy:8000/user/bigdaddy/",
+//     "jupyter.askForKernelRestart": true,
+//     "jupyter.kernelSpecPath": "/home/bigdaddy/.local/share/jupyter/kernels",
+//     "python.pythonPath": "/opt/jupyterhub/bin",
+//     "jupyter.logging.level": "debug",
+//     "jupyter.interactiveWindow.creationMode": "multiple"
+//   }
