@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "whisper-chunk-transcribe"
+version = "0.1.0"
+description = ""
+authors = ["Brett <brettdavies@users.noreply.github.com>"]
+readme = "README.md"
+packages = [{ include = "whisper_chunk_transcribe" }]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+psycopg2-binary = "^2.9.9"
+fire = "^0.4.0"
+loguru = "^0.7.2"
+python-dotenv = "^1.0.1"
+llvmlite = "0.43.0"
+numba = "0.60.0"
+numpy = "1.26.4"
+pydub = "^0.25.1"
+scipy = "^1.14.0"
+torch = "^2.4.0"
+torchvision = "^0.19.0"
+noisereduce = "^3.0.2"
+pyannote-audio = "^3.1.1"
+whisperx = "^3.1.5"
+faster-whisper = "1.0.1"
+
+[tool.poetry.scripts]
+chunk-transcribe = "whisper_chunk_transcribe.main:cmd"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
