@@ -23,9 +23,11 @@ noisereduce = "^3.0.2"
 pyannote-audio = "^3.1.1"
 whisperx = "^3.1.5"
 faster-whisper = "1.0.1"
+sshtunnel = "^0.4.0"
+pandas = "^2.2.2"
 
 [tool.poetry.scripts]
-chunk-transcribe = "whisper_chunk_transcribe.main:cmd"
+prepare-audio = "whisper_chunk_transcribe.prepare_audio:cmd"
 
 [build-system]
 requires = ["poetry-core"]
