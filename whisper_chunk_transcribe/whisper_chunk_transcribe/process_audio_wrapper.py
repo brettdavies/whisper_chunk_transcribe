@@ -27,17 +27,17 @@ def process_audio_sync(worker_name: str, source_file_path: Path, model_dir: Path
         try:
             audio_processor = AudioProcessor(model_dir, source_file_path, output_dir, worker_name, db_ops)
 
-            # # Transform source file to WAV
-            # logger.debug(f"[{worker_name}] Transforming \"{source_file_path}\"")
-            # await audio_processor.transform_source2wav()
+            # Transform source file to WAV
+            logger.debug(f"[{worker_name}] Transforming \"{source_file_path}\"")
+            await audio_processor.transform_source2wav()
 
-            # # Create VAD segments from the audio file
-            # logger.debug(f"[{worker_name}] VAD Processing \"{source_file_path}\"")
-            # await audio_processor.extract_segments_from_audio_file()
+            # Create VAD segments from the audio file
+            logger.debug(f"[{worker_name}] VAD Processing \"{source_file_path}\"")
+            await audio_processor.extract_segments_from_audio_file()
 
-            # # Segment the audio based on VAD
-            # logger.debug(f"[{worker_name}] Creating segments \"{source_file_path}\"")
-            # await audio_processor.segment_audio_based_on_vad()
+            # Segment the audio based on VAD
+            logger.debug(f"[{worker_name}] Creating segments \"{source_file_path}\"")
+            await audio_processor.segment_audio_based_on_vad()
 
         except Exception as e:
             logger.error(f"[{worker_name}] Error in process_audio_async: {e}")
