@@ -39,6 +39,10 @@ def process_audio_sync(worker_name: str, source_file_path: Path, model_dir: Path
             logger.debug(f"[{worker_name}] Creating segments \"{source_file_path}\"")
             await audio_processor.segment_audio_based_on_vad()
 
+            # Calculate SNR for each segment
+            logger.debug(f"[{worker_name}] Calculating SNR on segments")
+            await audio_processor.calculate_snr()
+
         except Exception as e:
             logger.error(f"[{worker_name}] Error in process_audio_async: {e}")
     

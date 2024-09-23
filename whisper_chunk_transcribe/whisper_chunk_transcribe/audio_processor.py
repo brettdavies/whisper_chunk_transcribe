@@ -298,7 +298,7 @@ class AudioProcessor:
             ]
 
             # Sample DataFrame with required columns
-            segment_df = pd.DataFrame(columns=[
+            self.segment_df = pd.DataFrame(columns=[
                 "video_id",
                 "segment_number",
                 "start_time",
@@ -357,12 +357,12 @@ class AudioProcessor:
                     logger.debug(f"[{self.worker_name}] Segment \"{segment_file_name}\" saved at \"{segment_file_path}\"")
 
                     # Update the segment DataFrame
-                    segment_df = await self.update_segment_df(segment_df, segment_number, start_time, end_time, segment_file_path, is_original)
+                    self.segment_df = await self.update_segment_df(self.segment_df, segment_number, start_time, end_time, segment_file_path, is_original)
             
             # Insert the segment DataFrame into the database
-            if not segment_df.empty:
-                logger.debug(f"[{self.worker_name}]\n{segment_df.to_string()}")
-                await asyncio.to_thread(self.db_ops.insert_audio_segment_df, segment_df, self.worker_name)
+            if not self.segment_df.empty:
+                logger.debug(f"[{self.worker_name}]\n{self.segment_df.to_string()}")
+                await asyncio.to_thread(self.db_ops.insert_audio_segment_df, self.segment_df, self.worker_name)
 
             else:
                 logger.debug(f"[{self.worker_name}] Segment DataFrame is empty")
@@ -640,6 +640,103 @@ class AudioProcessor:
 
         except Exception as e:
             logger.error(f"[{self.worker_name}] Error during transcription: {e}")
+
+    async def calculate_snr(self) -> None:
+        """
+        Calculate Signal-to-Noise Ratio (SNR) for each record in segment_df and update the database in batches.
+
+        Returns:
+            None
+        """
+        try:
+            # Define batch size
+            batch_size = 500
+            total_records = len(self.segment_df)
+
+            # Check if there are any segments to process
+            if total_records == 0:
+                logger.warning(f"[{self.worker_name}] No audio segments found to calculate SNR.")
+                return
+
+            # Process the segments in batches
+            for start in range(0, total_records, batch_size):
+                end = min(start + batch_size, total_records)
+                batch_df = self.segment_df.iloc[start:end]
+
+                logger.debug(f"[{self.worker_name}] Calculating SNR for {len(batch_df)} audio segments.")
+
+                # Prepare to gather SNR values for the current batch
+                snr_tasks = []
+                for index, segment in batch_df.iterrows():  # Iterate over the DataFrame rows
+                    raw_path = segment['raw_audio_path']
+                    processed_path = segment['processed_audio_path']
+                    
+                    # Log the paths being used for SNR calculation
+                    logger.debug(f"[{self.worker_name}] Computing SNR for raw: {raw_path}, processed: {processed_path}")
+                    
+                    snr_tasks.append(self.compute_snr(raw_path, processed_path))
+
+                # Gather SNR values for the current batch
+                snr_values = await asyncio.gather(*snr_tasks)
+
+                # Add SNR values to the DataFrame
+                batch_df['snr'] = snr_values
+
+                # Update SNR values in the database for the current batch
+                await asyncio.to_thread(self.db_ops.insert_audio_segment_snr, batch_df, self.worker_name)
+
+                logger.info(f"[{self.worker_name}] Calculated SNR for {len(batch_df)} audio segments.")
+
+        except Exception as e:
+            logger.error(f"[{self.worker_name}] Error calculating SNR: {e}")
+
+    @staticmethod
+    async def compute_snr(raw_audio_path: Path, processed_audio_path: Path) -> float:
+        """
+        Compute the Signal-to-Noise Ratio (SNR) between raw and processed audio.
+
+        Args:
+            raw_audio_path (str): Path to the raw audio file.
+            processed_audio_path (str): Path to the processed audio file.
+
+        Returns:
+            float: Calculated SNR value.    
+        """
+
+        # Load the raw and processed audio files
+        rate_raw, raw_audio = wavfile.read(raw_audio_path)
+        rate_processed, processed_audio = wavfile.read(processed_audio_path)
+
+        # Ensure that both audio files have the same length
+        min_length = min(len(raw_audio), len(processed_audio))
+        raw_audio = raw_audio[:min_length]
+        processed_audio = processed_audio[:min_length]
+
+        # Function to calculate the power of a signal
+        def calculate_power(signal):
+            return np.sum(signal ** 2) / len(signal)
+
+        # Function to calculate SNR
+        def calculate_snr(clean_signal, noisy_signal):
+            noise = noisy_signal - clean_signal
+            signal_power = calculate_power(clean_signal)
+            noise_power = calculate_power(noise)
+
+            # Handle division by zero by returning NaN
+            if noise_power == 0 or signal_power == 0:
+                logger.warning("Calculated SNR: Returning NaN due to zero power.")
+                return float('nan')
+
+            snr = 10 * np.log10(signal_power / noise_power)
+
+            return snr
+
+        # Calculate SNR
+        snr_value = calculate_snr(processed_audio, raw_audio)
+        
+        logger.debug(f"Calculated SNR: {snr_value:.2f}")
+
+        return snr_value
 
     async def test_prompt_tokens(self, audio_file: str, prompt: str):
         # Example prompt (you can replace this with your own)

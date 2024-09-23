@@ -131,16 +131,16 @@ class DatabaseOperations(metaclass=SingletonMeta):
         try:
             conn = self.connection_pool.getconn()
             if conn is None:
-                logger.error(f"{worker_namne if worker_namne else None} Failed to obtain database connection from the pool.")
-                raise psycopg2.OperationalError(f"{worker_namne if worker_namne else None} Unable to obtain database connection.")
+                logger.error(f"{"["+worker_namne+"] " if worker_namne else None}Failed to obtain database connection from the pool.")
+                raise psycopg2.OperationalError(f"{"["+worker_namne+"] " if worker_namne else None}Unable to obtain database connection.")
             yield conn
         except psycopg2.Error as e:
-            logger.error(f"{worker_namne if worker_namne else None} Error obtaining database connection: {e}")
+            logger.error(f"{"["+worker_namne+"] " if worker_namne else None}Error obtaining database connection: {e}")
             raise
         finally:
             if conn:
                 self.connection_pool.putconn(conn)
-                logger.debug(f"{worker_namne+" " if worker_namne else None}Database connection returned to the pool.")
+                logger.debug(f"{"["+worker_namne+"] " if worker_namne else None}Database connection returned to the pool.")
 
     def insert_prompt_terms_bulk(self, prompt_terms_df: pd.DataFrame) -> None:
         """
@@ -311,3 +311,102 @@ class DatabaseOperations(metaclass=SingletonMeta):
             except Exception as ex:
                 logger.error(f"[{worker_name}] Error in get_exp_video_ids: {ex}")
                 raise
+
+    def get_audio_segments_no_snr(self, worker_name: str, batch_size: int) -> List[dict]:
+        """
+        Retrieve the audio segments with no SNR value from the 'audio_segments' table.
+
+        Parameters:
+        - worker_name (str): The name of the worker for logging purposes.
+        - offset (int): The offset for pagination.
+        - batch_size (int): The number of records to retrieve.
+
+        Returns:
+            List[dict]: A list of dictionaries containing segment IDs and file paths for segments with no SNR value.
+        """
+        select_query = """
+            SELECT seg.segment_id, seg.raw_audio_path, seg.processed_audio_path
+            FROM audio_segments AS seg
+            WHERE seg.snr IS NULL
+            ORDER BY seg.segment_id
+            LIMIT %s;  -- Using LIMIT for batch size
+        """
+
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    logger.debug(f"[{worker_name}] Fetching audio segments with no SNR value")
+
+                    # Execute the query
+                    cursor.execute(select_query, (batch_size,)) # Pass the batch size as a parameter
+                    records = cursor.fetchall()
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
+
+                    # Return the relevant fields in a dictionary format
+                    return [{'segment_id': record['segment_id'], 'raw_audio_path': record['raw_audio_path'], 'processed_audio_path': record['processed_audio_path']} for record in records]
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in get_audio_segments_no_snr: {ex}")
+                raise
+
+    def insert_audio_segment_snr(self, audio_segments_df: pd.DataFrame, worker_name: str) -> None:
+        """
+        Insert or update audio segments in bulk from a pandas DataFrame into the 'audio_segments' table.
+
+        Parameters:
+        - audio_segments_df (pd.DataFrame): DataFrame containing audio segments.
+
+        Returns:
+            None
+        """
+        required_columns = [
+            'segment_id',
+            'snr'
+        ]
+
+        # Validate DataFrame columns
+        missing_columns = [col for col in required_columns if col not in audio_segments_df.columns]
+        if missing_columns:
+            logger.error(f"[{worker_name}] Missing required columns in the DataFrame: {missing_columns}")
+            raise ValueError(f"[{worker_name}] Missing required columns in the DataFrame: {missing_columns}")
+        else:
+            logger.debug(f"[{worker_name}] All required columns are present in the DataFrame.")
+
+        # Prepare data as list of tuples
+        data_tuples = list(audio_segments_df[required_columns].itertuples(index=False, name=None))
+        logger.debug(f"[{worker_name}] Prepared {len(data_tuples)} data tuples for insertion into 'audio_segments'.")
+        logger.debug(f"[{worker_name}] {data_tuples}")
+
+        if not data_tuples:
+            logger.warning(f"[{worker_name}] No data to insert into 'audio_segments'. Exiting method.")
+            return
+
+        # Define the updte query with upsert using psycopg2's parameter placeholders (%s)
+        insert_query = """
+            INSERT INTO audio_segments (
+                segment_id,
+                snr
+            )
+            VALUES (%s, %s)
+            ON CONFLICT (segment_id) DO UPDATE SET
+                snr = EXCLUDED.snr
+        """
+        with self.get_db_connection(worker_namne=worker_name) as conn:
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_audio_segment_snr.")
+
+                    # Execute the bulk insert using cursor.executemany
+                    cursor.executemany(insert_query, data_tuples)
+                    logger.info(f"[{worker_name}] Inserted / Updated {len(data_tuples)} snr values.")
+
+                    # Commit the transaction
+                    conn.commit()
+                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in insert_audio_segment_snr: {ex}")
+                conn.rollback()
+                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
+                raise
+
