@@ -2,7 +2,7 @@
 import os
 import psycopg2
 from psycopg2 import pool
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 from psycopg2.extras import DictCursor
 from sshtunnel import SSHTunnelForwarder
@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 # Third Party Libraries
 import pandas as pd
 import threading
+
+# First Party Libraries
+from .helper_classes import ExpSegment, ExpTestCase, TranscriptionSegment, TranscriptionWord, Transcription
 
 # Load environment variables from .env file
 load_dotenv()
@@ -59,7 +62,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
 
         # Validate required SSH and DB configurations
         required_vars = ['SSH_HOST', 'SSH_PORT', 'SSH_USER', 'SSH_KEY_PATH', 'DB_USER', 'DB_PASSWORD', 'DB_NAME']
-        missing = [var for var in required_vars if not os.getenv(var)]
+        missing = [var for var in required_vars if not os.environ.get(var)]
         if missing:
             logger.error(f"Missing required environment variables for SSH or DB: {', '.join(missing)}")
             raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
@@ -122,7 +125,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
             logger.error(f"Error during closing resources: {e}")
 
     @contextmanager
-    def get_db_connection(self, worker_namne: Optional[str]) -> Any:
+    def get_db_connection(self, worker_name: Optional[str]) -> Any:
         """
         Context manager for database connection.
         Ensures that the connection is properly returned to the pool.
@@ -131,16 +134,83 @@ class DatabaseOperations(metaclass=SingletonMeta):
         try:
             conn = self.connection_pool.getconn()
             if conn is None:
-                logger.error(f"{"["+worker_namne+"] " if worker_namne else None}Failed to obtain database connection from the pool.")
-                raise psycopg2.OperationalError(f"{"["+worker_namne+"] " if worker_namne else None}Unable to obtain database connection.")
+                logger.error(f"{"["+worker_name+"] " if worker_name else None}Failed to obtain database connection from the pool.")
+                raise psycopg2.OperationalError(f"{"["+worker_name+"] " if worker_name else None}Unable to obtain database connection.")
             yield conn
         except psycopg2.Error as e:
-            logger.error(f"{"["+worker_namne+"] " if worker_namne else None}Error obtaining database connection: {e}")
+            logger.error(f"{"["+worker_name+"] " if worker_name else None}Error obtaining database connection: {e}")
             raise
         finally:
             if conn:
                 self.connection_pool.putconn(conn)
-                logger.debug(f"{"["+worker_namne+"] " if worker_namne else None}Database connection returned to the pool.")
+                logger.debug(f"{"["+worker_name+"] " if worker_name else None}Database connection returned to the pool.")
+
+    def get_prompt_terms(self) -> List[str]:
+        select_query = """
+            SELECT term FROM prompt_terms;
+        """
+        with self.get_db_connection(None) as conn:
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug("Fetching prompt terms from the database.")
+
+                    # Execute the query
+                    cursor.execute(select_query)
+                    records = cursor.fetchall()
+                    logger.debug(f"Retrieved {len(records)} records from the database.")
+
+                    # Extract 'term' from each record
+                    return [record[0] for record in records]
+
+            except Exception as ex:
+                logger.error(f"Error in get_prompt_terms: {ex}")
+                raise
+
+    def set_prompt_token_length(self, prompt: str, token_length: int) -> None:
+        update_query = """
+            UPDATE prompt_terms
+            SET tokens = %s
+            WHERE term = %s;
+        """
+        with self.get_db_connection(None) as conn:
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug(f"Setting token length for prompt: {prompt}")
+
+                    # Execute the query
+                    cursor.execute(update_query, (token_length, prompt))
+                    conn.commit()
+                    logger.info(f"Token length set for prompt: {prompt}")
+
+            except Exception as ex:
+                logger.error(f"Error in set_prompt_token_length: {ex}")
+                conn.rollback()
+                logger.debug("Transaction rolled back due to error.")
+                raise
+
+    def get_exp_experiment_prompt_terms(self, experiment_id: int) -> List[str]:
+        select_query = """
+            SELECT term
+            FROM exp_experiment_prompt_terms
+            WHERE experiment_id = %s
+            ORDER BY final_score DESC;
+        """
+        with self.get_db_connection(None) as conn:
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug("Fetching prompt terms from the database.")
+
+                    # Execute the query
+                    cursor.execute(select_query, (experiment_id,))
+                    records = cursor.fetchall()
+                    logger.debug(f"Retrieved {len(records)} records from the database.")
+
+                    # Extract 'term' from each record
+                    return [record[0] for record in records]
+
+            except Exception as ex:
+                logger.error(f"Error in get_prompt_terms: {ex}")
+                raise
 
     def insert_prompt_terms_bulk(self, prompt_terms_df: pd.DataFrame) -> None:
         """
@@ -259,7 +329,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 raw_audio_path = EXCLUDED.raw_audio_path,
                 processed_audio_path = EXCLUDED.processed_audio_path;
         """
-        with self.get_db_connection(worker_namne=worker_name) as conn:
+        with self.get_db_connection(worker_name) as conn:
             try:
                 with conn.cursor() as cursor:
                     logger.debug(f"[{worker_name}] Connection acquired successfully for insert_audio_segment_df.")
@@ -295,7 +365,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
             WHERE e_vids.experiment_id = %s;
         """
 
-        with self.get_db_connection(worker_namne=worker_name) as conn:
+        with self.get_db_connection(worker_name) as conn:
             try:
                 with conn.cursor(cursor_factory=DictCursor) as cursor:
                     logger.debug(f"[{worker_name}] Fetching video local paths for experiment ID: {experiment_id}")
@@ -391,7 +461,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
             ON CONFLICT (segment_id) DO UPDATE SET
                 snr = EXCLUDED.snr
         """
-        with self.get_db_connection(worker_namne=worker_name) as conn:
+        with self.get_db_connection(worker_name) as conn:
             try:
                 with conn.cursor() as cursor:
                     logger.debug(f"[{worker_name}] Connection acquired successfully for insert_audio_segment_snr.")
@@ -410,3 +480,323 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
                 raise
 
+    def get_most_recent_modified_exp_id(self, worker_name: str) -> int:
+        select_query = """
+            SELECT experiment_id
+            FROM exp_experiments
+            ORDER BY modified_at DESC
+            LIMIT 1;
+        """
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    logger.debug(f"[{worker_name}] Fetching most recently modified experiment ID")
+
+                    # Execute the query
+                    cursor.execute(select_query)
+                    records = cursor.fetchall()
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
+
+                    # Return the relevant fields in a dictionary format
+                    return records[0]['experiment_id']
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] SQL Error in get_most_recent_modified_exp_id: {ex}")
+                raise
+
+    def get_exp_experiment_test_cases(self, worker_name: str, experiment_id: int) -> List[ExpTestCase]:
+        select_query = """
+            SELECT tc.test_case_id, tp.test_prompt_id, tc.prompt_template, tc.prompt_tokens, tc.is_dynamic
+            FROM exp_experiment_test_cases tc
+            JOIN exp_test_prompts tp ON tp.experiment_test_case_id = tc.test_case_id
+            WHERE tc.experiment_id = %s
+            ORDER BY tc.test_case_id;
+        """
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    logger.debug(f"[{worker_name}] Fetching test cases for experiment ID: {experiment_id}")
+
+                    # Execute the query
+                    cursor.execute(select_query, (experiment_id,))
+                    records = cursor.fetchall()
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} test cases from the database for experiment {experiment_id}.")
+
+                    # Return the relevant fields in a dictionary format
+                    return [ExpTestCase(experiment_id, record['test_case_id'], record['test_prompt_id'], record['prompt_template'], record['prompt_tokens'], record['is_dynamic']) for record in records]
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] SQL Error in get_exp_experiment_test_cases: {ex}")
+                raise
+
+    def get_exp_experiment_segments(self, worker_name: str, experiment_id: int, is_dynamic: bool) -> List[ExpSegment]:
+        select_query = """
+            SELECT seg.segment_id, seg.raw_audio_path, seg.processed_audio_path, exp_seg.test_case_id
+            FROM exp_experiment_segments AS exp_seg
+            JOIN audio_segments AS seg ON seg.segment_id = exp_seg.segment_id
+            JOIN exp_experiment_test_cases AS exp_tc ON exp_tc.test_case_id = exp_seg.test_case_id
+            WHERE TRUE
+                AND exp_seg.experiment_id = %s
+                AND exp_tc.is_dynamic = %s
+            ORDER BY seg.segment_id;
+        """
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    logger.debug(f"[{worker_name}] Fetching experiment segments for experiment ID: {experiment_id}")
+
+                    # Execute the query
+                    cursor.execute(select_query, (experiment_id, is_dynamic))
+                    records = cursor.fetchall()
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
+
+                    # Return the relevant fields in a dictionary format
+                    return [ExpSegment(record['segment_id'], record['raw_audio_path'], record['processed_audio_path'], record['test_case_id']) for record in records]
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] SQL Error in get_exp_segments: {ex}")
+                raise
+
+    def insert_test_prompt(self, worker_name: str, prompt: str, prompt_tokens: int, experiment_test_case_id: int) -> int:
+        select_query = """
+            SELECT test_prompt_id FROM exp_test_prompts
+            WHERE (prompt IS NOT DISTINCT FROM %s) AND prompt_tokens = %s AND experiment_test_case_id = %s AND deleted_at IS NULL
+            LIMIT 1;
+        """
+        insert_query = """
+            INSERT INTO exp_test_prompts (prompt, prompt_tokens, experiment_test_case_id)
+            VALUES (%s, %s, %s)
+            RETURNING test_prompt_id;
+        """
+        with self.get_db_connection(worker_name=worker_name) as conn:
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_test_prompt.")
+
+                    # 1. Check for Existing Record
+                    cursor.execute(select_query, (prompt, prompt_tokens, experiment_test_case_id))
+                    result = cursor.fetchone()
+
+                    if result:
+                        test_prompt_id = result[0]
+                        logger.info(f"Test prompt already exists with id: {test_prompt_id}")
+                        return test_prompt_id
+
+                    # 2. Insert New Record
+                    cursor.execute(insert_query, (prompt, prompt_tokens, experiment_test_case_id))
+                    insert_result = cursor.fetchone()
+
+                    if insert_result:
+                        test_prompt_id = insert_result[0]
+                        logger.info(f"Test prompt inserted with id: {test_prompt_id}")
+                        conn.commit()
+                        logger.debug(f"[{worker_name}] Transaction committed successfully.")
+                        return test_prompt_id
+                    else:
+                        logger.error(f"[{worker_name}] Insert operation did not return test_prompt_id.")
+                        conn.rollback()
+                        logger.debug(f"[{worker_name}] Transaction rolled back due to missing test_prompt_id.")
+                        raise Exception("Failed to insert test_prompt_id.")
+
+            except psycopg2.IntegrityError as ie:
+                # Handle race condition: another process might have inserted the same record
+                conn.rollback()
+                logger.warning(f"[{worker_name}] IntegrityError occurred: {ie}. Retrying SELECT.")
+                try:
+                    with conn.cursor() as retry_cursor:
+                        retry_cursor.execute(select_query, (prompt, prompt_tokens, experiment_test_case_id))
+                        retry_result = retry_cursor.fetchone()
+                        if retry_result:
+                            test_prompt_id = retry_result[0]
+                            logger.info(f"Test prompt already exists after IntegrityError with id: {test_prompt_id}")
+                            return test_prompt_id
+                        else:
+                            logger.error(f"[{worker_name}] Retry SELECT did not find the test_prompt_id.")
+                            raise Exception("Failed to insert or retrieve test_prompt_id after IntegrityError.")
+                except Exception as ex_inner:
+                    logger.error(f"[{worker_name}] Error during retry SELECT: {ex_inner}")
+                    raise
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in insert_test_prompt: {ex}")
+                conn.rollback()
+                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
+                raise
+
+    def insert_exp_test(self, worker_name: str, test_case: ExpTestCase, segment_id: int, is_raw_audio: bool, average_probability: float, average_avg_logprob: float) -> int:
+        insert_query = """
+            INSERT INTO "exp_tests" (
+                experiment_id,
+                segment_id,
+                test_case_id,
+                test_prompt_id,
+                is_raw_audio,
+                average_probability,
+                average_avg_logprob
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (experiment_id, segment_id, test_case_id, test_prompt_id, is_raw_audio) DO UPDATE SET
+                average_probability = EXCLUDED.average_probability,
+                average_avg_logprob = EXCLUDED.average_avg_logprob
+            RETURNING test_id;
+        """
+        with self.get_db_connection(worker_name) as conn:
+            test_id = None
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test.")
+
+                    cursor.execute(insert_query, (
+                        test_case.experiment_id,
+                        segment_id,
+                        test_case.test_case_id,
+                        test_case.test_prompt_id,
+                        is_raw_audio,
+                        average_probability,
+                        average_avg_logprob
+                    ))
+                    test_id = cursor.fetchone()[0]
+                    logger.debug(f"[{worker_name}] Inserted / Updated Test ID: {test_id}.")
+
+                    # Commit the transaction
+                    conn.commit()
+                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in insert_exp_test: {ex}")
+                conn.rollback()
+                test_id = None
+                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
+                raise
+
+            finally:
+                return test_id
+
+    def insert_exp_test_transcriptions(self, worker_name: str, test_id: int, transcription_text: str) -> None:
+        insert_query = """
+            INSERT INTO "exp_test_transcriptions" (
+                test_id,
+                transcription_text
+            )
+            VALUES (%s, %s)
+            ON CONFLICT (test_id) DO NOTHING;
+        """
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test_transcriptions.")
+
+                    cursor.execute(insert_query, (
+                        test_id,
+                        transcription_text
+                    ))
+                    logger.debug(f"[{worker_name}] Inserted test transcript: {test_id}.")
+
+                    # Commit the transaction
+                    conn.commit()
+                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in insert_exp_test_transcriptions: {ex}")
+                conn.rollback()
+                test_id = None
+                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
+                raise
+
+    def insert_exp_test_transcription_segments(self, worker_name: str, test_id: int, segments: List[TranscriptionSegment]) -> None:
+        insert_query = """
+            INSERT INTO "exp_test_transcription_segments" (
+                test_id,
+                segment_number,
+                segment_text,
+                avg_logprob,
+                start_time,
+                end_time
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (test_id, segment_number) DO NOTHING;
+        """
+        # Prepare data as list of tuples with segment_number
+        data_tuples = [
+            (test_id, index + 1, segment.transcribed_text, segment.avg_logprob, segment.start, segment.end)
+            for index, segment in enumerate(segments)
+        ]
+        logger.debug(f"[{worker_name}] Prepared {len(data_tuples)} data tuples for insertion into 'exp_test_transcription_segments'.")
+        logger.debug(f"[{worker_name}] {data_tuples}")
+
+        if not data_tuples:
+            logger.warning(f"[{worker_name}] No data to insert into 'exp_test_transcription_segments'. Exiting method.")
+            return
+
+        with self.get_db_connection(worker_name) as conn:
+            test_id = None
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test_transcription_segments.")
+
+                    # Execute the bulk insert using cursor.executemany
+                    cursor.executemany(insert_query, data_tuples)
+                    logger.info(f"[{worker_name}] Inserted transcription segment values.")
+
+                    # Commit the transaction
+                    conn.commit()
+                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in insert_exp_test_transcription_segments: {ex}")
+                conn.rollback()
+                test_id = None
+                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
+                raise
+
+            finally:
+                return test_id
+
+    def insert_exp_test_transcription_words(self, worker_name: str, test_id: int, words: List[TranscriptionWord]) -> None:
+        insert_query = """
+            INSERT INTO "exp_test_transcription_words" (
+                test_id,
+                word_number,
+                word_text,
+                start_time,
+                end_time,
+                probability
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (test_id, word_number) DO NOTHING;
+        """
+        # Prepare data as list of tuples with word_number
+        data_tuples = [
+            (test_id, index + 1, word.word, word.start, word.end, word.probability)
+            for index, word in enumerate(words)
+        ]
+
+        logger.debug(f"[{worker_name}] Prepared {len(data_tuples)} data tuples for insertion into 'exp_test_transcription_words'.")
+        logger.debug(f"[{worker_name}] {data_tuples}")
+
+        if not data_tuples:
+            logger.warning(f"[{worker_name}] No data to insert into 'exp_test_transcription_words'. Exiting method.")
+            return
+
+        with self.get_db_connection(worker_name) as conn:
+            test_id = None
+            try:
+                with conn.cursor() as cursor:
+                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test_transcription_words.")
+
+                    # Execute the bulk insert using cursor.executemany
+                    cursor.executemany(insert_query, data_tuples)
+                    logger.info(f"[{worker_name}] Inserted transcription segment values.")
+
+                    # Commit the transaction
+                    conn.commit()
+                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in insert_exp_test_transcription_words: {ex}")
+                conn.rollback()
+                test_id = None
+                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
+                raise
+
+            finally:
+                return test_id
