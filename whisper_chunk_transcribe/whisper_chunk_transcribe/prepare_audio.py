@@ -15,18 +15,14 @@ from dotenv import load_dotenv
 from .logger_config import LoggerConfig
 from .utils import Utils
 from .database import DatabaseOperations
-from .prompt_token_tester import TokenTester
 from .process_audio_wrapper import process_audio_sync
 
 # Load environment variables
 load_dotenv()
 
 # Configure loguru
-LOGGER_NAME = "main"
+LOGGER_NAME = "prepare_audio"
 LoggerConfig.setup_logger(log_name=LOGGER_NAME, log_level=os.getenv("LOG_LEVEL", "INFO"))
-
-# Load environment variables
-load_dotenv()
 
 class QueueManager:
     def __init__(self):
@@ -46,33 +42,10 @@ class PrepareAudio:
         self.queue_manager = QueueManager()
         self.db_ops = DatabaseOperations()
 
-    async def determine_token_length(self, model_for_testing: Path) -> None:
-        """
-        Determine the length of tokens for specific words and phrases.
-
-        Args:
-            model_for_testing (Path): The directory containing the model for testing.
-
-        Returns:
-            None
-        """
-        try:
-            if not model_for_testing or not model_for_testing.is_dir():
-                model_for_testing_env = os.getenv("MODEL_FOR_TESTING")
-                if not model_for_testing_env or not Path(model_for_testing_env).is_dir():
-                    raise ValueError("MODEL_FOR_TESTING is not set or is invalid")
-                model_for_testing = Path(model_for_testing_env)
-
-            token_tester = TokenTester(model_for_testing)
-            await token_tester.determine_token_length()
-
-        except Exception as e:
-            logger.error(f"Error determining token length: {e}")
-
     async def worker(
             self, 
             worker_id: int, 
-            model_dir: Path, 
+            model_for_vad: Path, 
             output_dir: Path, 
             executor: ProcessPoolExecutor
         ) -> None:
@@ -81,7 +54,7 @@ class PrepareAudio:
 
         Args:
             worker_id (int): Identifier for the worker.
-            model_dir (Path): Directory containing the model.
+            model_for_vad (Path): Path to the model to use for VAD.
             output_dir (Path): Directory to store output files.
             executor (ProcessPoolExecutor): Executor for running CPU-bound tasks.
 
@@ -113,7 +86,7 @@ class PrepareAudio:
                         process_audio_sync, 
                         worker_name, 
                         source_file_path, 
-                        model_dir, 
+                        model_for_vad, 
                         output_dir
                     )
                     logger.info(f"[{worker_name}] Processed file: {source_file_path}")
@@ -131,7 +104,7 @@ class PrepareAudio:
     async def fetch(
             self,
             output_dir: Path = None,
-            model_base_dir: Path = None,
+            model_for_vad: Path = None,
             audio_file_dir: Path = None,
             prompt_file: Path = None,
             experiment_id: int = None,
@@ -142,7 +115,7 @@ class PrepareAudio:
 
         Args:
             output_dir (Path): Directory to store output files.
-            model_base_dir (Path): Directory containing the models.
+            model_for_vad (Path): Path to the model to use for VAD.
             audio_file_dir (Path): Directory containing audio files.
             prompt_file (Path): Path to the prompt file.
             experiment_id (int): Identifier for the experiment.
@@ -159,15 +132,15 @@ class PrepareAudio:
                 return
 
             # Validate and create directories asynchronously
-            output_dir: Path = await Utils.validate_and_create_dir(output_dir, "OUTPUT_DIR")
+            output_dir: Path = await Utils.validate_and_create_dir(output_dir, "OUTPUT_DIR", True)
             if not output_dir:
                 return
 
-            model_base_dir: Path = await Utils.validate_and_create_dir(model_base_dir, "MODEL_BASE_DIR")
-            if not model_base_dir:
+            model_for_vad: Path = await Utils.validate_and_create_dir(model_for_vad, "MODEL_FOR_VAD", False)
+            if not model_for_vad:
                 return
 
-            audio_file_dir: Path = await Utils.validate_and_create_dir(audio_file_dir, "AUDIO_FILE_DIR")
+            audio_file_dir: Path = await Utils.validate_and_create_dir(audio_file_dir, "AUDIO_FILE_DIR", False)
             if not audio_file_dir:
                 return
 
@@ -206,7 +179,7 @@ class PrepareAudio:
                 asyncio.create_task(
                     self.worker(
                         worker_id=i+1, 
-                        model_dir=model_base_dir, 
+                        model_for_vad=model_for_vad, 
                         output_dir=output_dir,
                         executor=executor
                     )

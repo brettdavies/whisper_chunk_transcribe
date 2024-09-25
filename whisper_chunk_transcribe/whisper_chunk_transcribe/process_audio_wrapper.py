@@ -9,7 +9,7 @@ from loguru import logger
 from .audio_processor import AudioProcessor
 from .database import DatabaseOperations
 
-def process_audio_sync(worker_name: str, source_file_path: Path, model_dir: Path, output_dir: Path):
+def process_audio_sync(worker_name: str, source_file_path: Path, model_for_vad: Path, output_dir: Path) -> None:
     """
     Synchronous wrapper to run the asynchronous process_audio method.
     
@@ -22,10 +22,10 @@ def process_audio_sync(worker_name: str, source_file_path: Path, model_dir: Path
     Returns:
         None
     """
-    async def runner():
+    async def runner() -> None:
         db_ops = DatabaseOperations()
         try:
-            audio_processor = AudioProcessor(model_dir, source_file_path, output_dir, worker_name, db_ops)
+            audio_processor = AudioProcessor(model_for_vad, source_file_path, output_dir, worker_name, db_ops)
 
             # Transform source file to WAV
             logger.debug(f"[{worker_name}] Transforming \"{source_file_path}\"")

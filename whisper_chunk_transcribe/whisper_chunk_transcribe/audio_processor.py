@@ -1,6 +1,4 @@
 # Standard Libraries
-import json
-import random
 import asyncio
 from pathlib import Path
 
@@ -18,21 +16,19 @@ from scipy.signal import wiener
 from pyannote.core import Annotation
 from pyannote.audio import Model
 from pyannote.audio.pipelines import VoiceActivityDetection
-from faster_whisper import WhisperModel
 
 # First Party Libraries
 from .utils import Utils
-from .metadata import Metadata
 from .database import DatabaseOperations
 
 class AudioProcessor:
-    def __init__(self, model_dir: Path, source_file_path: Path, output_dir: Path, worker_name: str, db_ops: DatabaseOperations) -> None:
+    def __init__(self, model_for_vad: Path, source_file_path: Path, output_dir: Path, worker_name: str, db_ops: DatabaseOperations) -> None:
         self.db_ops = db_ops
         self.worker_name = worker_name
         logger.debug(f"[{self.worker_name}] Worker: {self.worker_name}")
 
-        self.model_dir = model_dir
-        logger.debug(f"[{self.worker_name}] Model Dir: {self.model_dir}")
+        self.model_for_vad = model_for_vad
+        logger.debug(f"[{self.worker_name}] VAD Model Dir: {self.model_for_vad}")
 
         self.output_dir = output_dir
         logger.debug(f"[{self.worker_name}] Output Dir: {self.output_dir}")
@@ -120,7 +116,7 @@ class AudioProcessor:
         except Exception as e:
             logger.error(f"[{self.worker_name}] Error in transform_source2wav: {e}")
 
-    async def load_vad_pipeline(self):
+    async def load_vad_pipeline(self) -> VoiceActivityDetection:
         """
         Load the Voice Activity Detection (VAD) pipeline.
 
@@ -129,13 +125,12 @@ class AudioProcessor:
         """
         try:
             # Path to the model directory
-            vad_model_dir = f"{self.model_dir}/pyannote_segmentation-3.0/pytorch_model.bin"
             model = Model.from_pretrained(
-                vad_model_dir,
+                self.model_for_vad,
                 repo_type="local"  # Indicates usage of a local model repository
             )
 
-            logger.debug(f"[{self.worker_name}] Loading VAD pipeline from directory: {vad_model_dir}")
+            logger.debug(f"[{self.worker_name}] Loading VAD pipeline from: {self.model_for_vad}")
 
             # Initialize the VAD pipeline
             pipeline = VoiceActivityDetection(
@@ -516,131 +511,6 @@ class AudioProcessor:
             logger.error(f"[{self.worker_name}] Error saving WAV file: {e}")
             return False
 
-    async def load_model(self) -> None:
-        """
-        Load the Whisper model and initialize the tokenizer.
-
-        Parameters:
-        None
-
-        Returns:
-        None
-        """
-        try:
-            # Initialize the Whisper model with the Whisper model in the local directory and the specified device (GPU)
-            self.model = WhisperModel(self.model_dir, device=self.device)
-
-            # Access the tokenizer
-            self.tokenizer = self.model.hf_tokenizer
-
-            logger.info(f"[{self.worker_name}] Whisper model loaded successfully")
-        except Exception as e:
-            logger.error(f"[{self.worker_name}] Error loading Whisper model: {e}")
-
-    async def transcribe_audio(self, is_original: bool) -> None:
-        """
-        Transcribe all WAV files in the given directory using the faster-whisper model.
-        The function writes the transcription, word-level confidence scores, 
-        and segment-level confidence scores to separate files.
-
-        Parameters:
-        None
-
-        Returns:
-        None
-        """
-        try:
-            if is_original:
-                segment_path = self.original_segment_file_path
-            else:
-                segment_path = self.output_file_processed_path_name
-
-            logger.info(f"[{self.worker_name}] Transcribing audio files in directory: \"{self.vad}\"")
-            
-            if not self.model:
-                self.load_model()
-
-            prompt_id, initial_prompt = None
-
-            try:
-                # retrieve a random prompt from the metadata whisper_prompts list
-                whisper_prompts = Metadata.whisper_prompts
-                random_prompt = random.choice(whisper_prompts)
-                prompt_id = random_prompt["key"]
-                initial_prompt = random_prompt["value"]
-            except:
-                logger.error(f"[{self.worker_name}] Error retrieving random prompt from metadata")
-
-            if segment_path.endswith(".wav"):
-                file_path = self.segment_file_path / segment_path
-                logger.info(f"[{self.worker_name}] Processing file: \"{file_path}\"")
-
-                try:
-                    # Transcribe the audio file with a prompt
-                    if initial_prompt:
-                        segments_generator, info = self.model.transcribe(file_path, beam_size=5, word_timestamps=True, initial_prompt=initial_prompt)
-                    
-                    # Transcribe the audio file without a prompt
-                    else:
-                        segments_generator, info = self.model.transcribe(file_path, beam_size=5, word_timestamps=True)
-
-                    logger.debug(f"[{self.worker_name}] Info:\n{info}")
-
-                    # Convert generator to list
-                    segments = list(segments_generator)
-                    logger.debug(f"[{self.worker_name}] Segments:\n{segments}")
-
-                    if not segments:
-                        logger.error(f"[{self.worker_name}] No segments found for file: \"{file_path}\"")
-
-                    # Prepare to store results
-                    transcription_text = []
-                    word_confidences = []
-                    segment_confidences = []
-
-                    # Extract transcription and confidence scores
-                    for segment in segments:
-                        if segment is None:
-                            continue
-
-                        transcription_text.append(segment.text)
-
-                        # Check if words attribute is None
-                        if segment.words:
-                            word_confidences.extend(segment.words)
-                        else:
-                            logger.warning(f"[{self.worker_name}] No word-level details for segment: {segment.text}")
-
-                        segment_confidences.append({
-                            "start": segment.start,
-                            "end": segment.end,
-                            "complement_avg_logprob": (1 + segment.avg_logprob)
-                        })
-
-                    # Write the transcription text to a file
-                    transcription_file = file_path.replace(".wav", ".txt")
-                    with open(transcription_file, 'w') as f:
-                        f.write("\n".join(transcription_text))
-                    logger.debug(f"[{self.worker_name}] Transcription written to: \"{transcription_file}\"")
-
-                    # Write word-level confidence scores to a file
-                    word_confidence_file = file_path.replace(".wav", "_word_confidences.json")
-                    with open(word_confidence_file, 'w') as f:
-                        json.dump([wc._asdict() for wc in word_confidences], f, indent=4)
-                    logger.debug(f"[{self.worker_name}] Word-level confidence scores written to: \"{word_confidence_file}\"")
-
-                    # Write segment-level confidence scores to a file
-                    segment_confidence_file = file_path.replace(".wav", "_segment_confidences.json")
-                    with open(segment_confidence_file, 'w') as f:
-                        json.dump(segment_confidences, f, indent=4)
-                    logger.debug(f"[{self.worker_name}] Segment-level confidence scores written to: \"{segment_confidence_file}\"")
-
-                except Exception as e:
-                    logger.error(f"[{self.worker_name}] Error processing file {file_path}: {e}")
-
-        except Exception as e:
-            logger.error(f"[{self.worker_name}] Error during transcription: {e}")
-
     async def calculate_snr(self) -> None:
         """
         Calculate Signal-to-Noise Ratio (SNR) for each record in segment_df and update the database in batches.
@@ -737,62 +607,4 @@ class AudioProcessor:
         logger.debug(f"Calculated SNR: {snr_value:.2f}")
 
         return snr_value
-
-    async def test_prompt_tokens(self, audio_file: str, prompt: str):
-        # Example prompt (you can replace this with your own)
-        prompt = "Baseball game commentary transcription. Focus on accurate recognition of key terms like pitch, strikeout, home run, etc."
-
-        # Tokenize the prompt
-        prompt_tokens = self.tokenizer.encode(prompt)
-
-        # Set up an example of an audio file for transcription (replace 'audio_file_path' with your actual file)
-        audio_file = audio_file
-
-        # Transcribe the audio with the initial_prompt
-        segments_with_prompt, _ = self.model.transcribe(audio_file, initial_prompt=prompt)
-
-        # Count the tokens generated by the transcription (with prompt)
-        transcription_tokens_with_prompt = 0
-        for segment in segments_with_prompt:
-            transcription_tokens_with_prompt += len(self.tokenizer.encode(segment.text))
-
-        # Total tokens (prompt + transcription with prompt)
-        total_tokens_with_prompt = len(prompt_tokens) + transcription_tokens_with_prompt
-
-        logger.info(f"[{self.worker_name}] --- Results WITH Initial Prompt ---")
-        logger.info(f"[{self.worker_name}] Number of tokens in the prompt: {transcription_tokens_with_prompt}")
-        logger.info(f"[{self.worker_name}] Number of tokens in the prompted transcription: {transcription_tokens_with_prompt}")
-        logger.info(f"[{self.worker_name}] Total tokens (prompt + prompted transcription): {total_tokens_with_prompt}")
-
-        # Transcribe the audio without the initial_prompt
-        segments_without_prompt, _ = self.model.transcribe(audio_file)
-
-        # Count the tokens generated by the transcription (without prompt)
-        transcription_tokens_without_prompt = 0
-        for segment in segments_without_prompt:
-            transcription_tokens_without_prompt += len(self.tokenizer.encode(segment.text))
-
-        # Total tokens (transcription without prompt)
-        total_tokens_without_prompt = transcription_tokens_without_prompt
-
-        logger.info(f"[{self.worker_name}] --- Results WITHOUT Initial Prompt ---")
-        logger.info(f"[{self.worker_name}] Number of tokens in the unprompted transcription: {transcription_tokens_without_prompt}")
-        logger.info(f"[{self.worker_name}] Total tokens (transcription only): {total_tokens_without_prompt}")
-
-        # Check if total with prompt exceeds the 255-token limit
-        if total_tokens_with_prompt > 255:
-            logger.info(f"[{self.worker_name}] Warning: Total tokens (with prompt) exceed the 255-token limit by {total_tokens_with_prompt - 255} tokens.")
-        else:
-            logger.info(f"[{self.worker_name}] The total token count (with prompt) is within the 255-token limit.")
-
-        # Check if total without prompt exceeds the 255-token limit
-        if total_tokens_without_prompt > 255:
-            logger.info(f"[{self.worker_name}] Warning: Total tokens (without prompt) exceed the 255-token limit by {total_tokens_without_prompt - 255} tokens.")
-        else:
-            logger.info(f"[{self.worker_name}] The total token count (without prompt) is within the 255-token limit.")
-
-        # Check if the total tokens with prompt are less than the total tokens without prompt
-        if total_tokens_with_prompt < total_tokens_without_prompt:
-            logger.info(f"[{self.worker_name}] Warning: The total token count (with prompt) is less than the total token count (without prompt) by {total_tokens_without_prompt - total_tokens_with_prompt} tokens.")
-        else:
-            logger.info(f"[{self.worker_name}] The total token count (with prompt) is greater than or equal to the total token count (without prompt).")
+    
