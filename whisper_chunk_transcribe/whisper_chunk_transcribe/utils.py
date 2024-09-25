@@ -14,14 +14,14 @@ from .database import DatabaseOperations
 
 class Utils:
     @staticmethod
-    async def validate_and_create_dir(dir_path: Path, env_var_name) -> Path:
-        """Validate directory, attempt to fetch from environment variable if not provided, and create if necessary."""
+    async def validate_and_create_dir(dir_path: Path, env_var_name: str, create: bool) -> Path:
+        """Validate directory, attempt to fetch from environment variable if not provided. Create if bool is True."""
         if not dir_path or not dir_path.is_dir():
             dir_path = Path(os.getenv(env_var_name))
             if not dir_path:
                 logger.error(f"{env_var_name} is not set")
                 return False
-            else:
+            elif create:
                 try:
                     dir_path.mkdir(parents=True, exist_ok=True)
                 except OSError as e:

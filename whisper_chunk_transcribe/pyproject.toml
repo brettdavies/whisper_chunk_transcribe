@@ -28,6 +28,7 @@ pandas = "^2.2.2"
 
 [tool.poetry.scripts]
 prepare-audio = "whisper_chunk_transcribe.prepare_audio:cmd"
+run-experiment = "whisper_chunk_transcribe.experiment_runner:cmd"
 
 [build-system]
 requires = ["poetry-core"]
