@@ -26,7 +26,7 @@ load_dotenv()
 
 # Configure loguru
 LOGGER_NAME = "experiment_runner"
-LoggerConfig.setup_logger(log_name=LOGGER_NAME, log_level=os.environ.get("LOG_LEVEL", "INFO"))
+LoggerConfig.setup_logger(log_name=LOGGER_NAME, log_level=os.environ.get("LOG_LEVEL", "INFO"), log_dir=os.environ.get("LOG_DIR", "/media/bigdaddy/data/log/"))
 
 class QueueManager:
     def __init__(self):
@@ -51,11 +51,7 @@ class ExperimentRunner:
         self.db_ops = DatabaseOperations()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    async def worker(
-            self,
-            worker_id: int,
-            executor: ThreadPoolExecutor
-        ) -> None:
+    async def worker(self, worker_id: int, executor: ThreadPoolExecutor) -> None:
         """
         Worker coroutine that processes audio transcription tasks.
 
@@ -93,7 +89,7 @@ class ExperimentRunner:
                     logger.error(f"[{worker_name}] Worker task was cancelled.")
                     break
                 except Exception as e:
-                    logger.error(f"[{worker_name}] Error processing file: {e}")
+                    logger.error(f"[{worker_name}] Error processing segment {segment.segment_id}: {e}")
                 finally:
                     self.queue_manager.segment_queue.task_done()
         except Exception as e:
@@ -105,10 +101,10 @@ class ExperimentRunner:
             "ExperimentRunner",
             self.experiment_id
         )
-        logger.debug(f"Test case details: {str(self.test_cases)}")
+        # logger.debug(f"Test case details: {str(self.test_cases)}")
         logger.info(f"Number of test cases: {len(self.test_cases)}")
 
-    async def retrieve_exp_experiment_segments(self, is_dynamic: bool) -> None:
+    async def retrieve_exp_experiment_segments(self, use_prev_transcription: bool) -> None:
         """
         Retrieve video local paths from the database asynchronously and add them to the segment queue.
 
@@ -122,7 +118,7 @@ class ExperimentRunner:
             self.db_ops.get_exp_experiment_segments,
             "ExperimentRunner",
             self.experiment_id,
-            is_dynamic
+            use_prev_transcription
         )
         for segment in segments:
             logger.debug(f"Adding segment {segment.segment_id} to the queue.")
@@ -142,7 +138,7 @@ class ExperimentRunner:
             self,
             model_for_transcribe: Path = None,
             experiment_id: int = None,
-            num_workers: int = 10
+            num_workers: int = 1
         ) -> None:
         """
         Fetch and process audio segments using multiple workers.
@@ -189,11 +185,12 @@ class ExperimentRunner:
             else:
                 logger.info(f"Model for transcription: {self.model_for_transcribe}")
 
-            # Retrieve segments for test cases that do NOT reference previous transcriptions
+            # Retrieve test cases
             await self.retrieve_exp_experiment_test_cases()
 
             # Retrieve segments for test cases that do NOT reference previous transcriptions
-            await self.retrieve_exp_experiment_segments(is_dynamic=False)
+            # await self.retrieve_exp_experiment_segments(is_dynamic=False)
+            await self.retrieve_exp_experiment_segments(use_prev_transcription=True)
 
             # Create workers
             if self.device == "cpu":
@@ -204,35 +201,37 @@ class ExperimentRunner:
             else:
                 max_workers = num_workers
             
-            # Initialize ThreadPoolExecutor
-            executor = ThreadPoolExecutor(max_workers=max_workers)
+            if self.queue_manager.segment_queue.qsize() > 0:
+                # Initialize ThreadPoolExecutor
+                executor = ThreadPoolExecutor(max_workers=max_workers)
 
-            # Start worker tasks
-            workers = [
-                asyncio.create_task(
-                    self.worker(
-                        worker_id=i + 1, 
-                        executor=executor
+                # Start worker tasks
+                workers = [
+                    asyncio.create_task(
+                        self.worker(
+                            worker_id=i + 1, 
+                            executor=executor
+                        )
                     )
-                )
-                for i in range(max_workers)
-            ]
+                    for i in range(max_workers)
+                ]
 
-            # Wait until the queue is fully processed
-            await self.queue_manager.segment_queue.join()
+                # Wait until the queue is fully processed
+                await self.queue_manager.segment_queue.join()
+                logger.info("All non-dynamic segments processed.")
 
-            # # # Retrieve segments for test cases that reference previous transcriptions
-            # # await self.retrieve_exp_experiment_segments(is_dynamic=True)
+                # # Retrieve segments for dynamic test cases
+                # await self.retrieve_exp_experiment_segments(use_prev_transcription=True)
 
-            # # # Wait until the queue is fully processed
-            # # await self.queue_manager.segment_queue.join()
+                # # Wait until the queue is fully processed
+                # await self.queue_manager.segment_queue.join()
 
-            # Stop workers by sending sentinel values
-            for _ in workers:
-                await self.queue_manager.segment_queue.put(None)
+                # Stop workers by sending sentinel values
+                for _ in workers:
+                    await self.queue_manager.segment_queue.put(None)
 
-            # Wait for workers to finish
-            await asyncio.gather(*workers)
+                # Wait for workers to finish
+                await asyncio.gather(*workers)
 
         except asyncio.CancelledError:
             logger.error("Fetch task was cancelled. Initiating shutdown.")

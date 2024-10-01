@@ -12,7 +12,7 @@ from faster_whisper import WhisperModel
 
 # First Party Libraries
 from .database import DatabaseOperations
-from .helper_classes import TranscriptionWord, TranscriptionSegment, Transcription
+from .helper_classes import TranscriptionWord, TranscriptionSegment, Transcription, ExpTestCase, ExpSegment, PromptData
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +33,7 @@ class TranscriptionProcessor:
         Determine the length of tokens for specific words and phrases.
         """
         tokens = len(self.tokenizer.encode(prompt_to_tokenize))
+        # logger.debug(f"[{self.worker_name}] {tokens} tokens in prompt: \"{prompt_to_tokenize}\"")
         return tokens
 
     async def set_initial_prompt(self, test_prompt_id: int, test_prompt: str, test_prompt_tokens: int) -> None:
@@ -40,39 +41,135 @@ class TranscriptionProcessor:
         self.test_prompt = test_prompt
         self.test_prompt_tokens = test_prompt_tokens
 
-    async def prepare_initial_prompt(self, prompt_template: str, experiment_test_case_id: int, is_dynamic: bool) -> None:
+    async def build_prompt(self, initial_prompt: str, full_transcription: str, max_tokens: int = 255, initial_step: int = 10, step_decrement: int = 1) -> str:
         """
-        Prepare the initial prompt for the transcription process.
+        Builds the initial_prompt by adding words from the end of full_transcription.
+        Starts by adding 'initial_step' words at a time.
+        If adding 'initial_step' words exceeds max_tokens, decrement the step by 'step_decrement' and try again.
+        Continues until the token limit is reached without exceeding it.
 
         Args:
-            prompt_template (str): The template for the initial prompt.
+            initial_prompt: The template prompt containing the placeholder {previous_transcription}
+            full_transcription: The complete transcription text
+            max_tokens: The maximum allowed number of tokens
+            initial_step: Number of words to add initially
+            step_decrement: Number to decrement the step by when the token limit is exceeded
 
         Returns:
-            None
+            The constructed prompt with previous_transcription inserted
+        """
+        words = full_transcription.split()
+        total_words = len(words)
+
+        best_fit_transcription = ""
+        current_step = initial_step
+        start = total_words  # Start from the end
+        end = total_words
+
+        while start > 0 and current_step > 0:
+            # Move the start pointer back by 'current_step' words
+            start = max(start - current_step, 0)
+            subset_words = words[start:end]
+            subset_transcription = ' '.join(subset_words)
+
+            # Replace the placeholder with the current subset
+            prompt = initial_prompt.replace("{previous_transcription}", subset_transcription.strip() + " " + best_fit_transcription.strip())
+
+            # Determine the token length
+            tokens = await self.determine_token_length(prompt)
+
+            if tokens > max_tokens:
+                logger.debug(f"[{self.worker_name}] Tokens {tokens}\n{prompt}")
+                if current_step == 1:
+                    # Cannot add more words without exceeding the limit
+                    break
+                else:
+                    # Reset the starting point
+                    start = max(start + current_step, 0)
+                    # Reduce the step size and try again
+                    current_step -= step_decrement
+                    logger.debug(f"[{self.worker_name}] {tokens} exceeds token limit. Decrementing step to {current_step}")
+            else:
+                # Update the best fit and expand the window
+                best_fit_transcription = subset_transcription.strip() + " " + best_fit_transcription.strip()
+                logger.debug(f"[{self.worker_name}] Tokens {tokens} Updated best fit transcription:\n{best_fit_transcription}")
+                
+                # Reset the step to initial_step for the next iteration
+                current_step = initial_step
+                
+                # Continue to add more words
+                end = start
+
+        # Final prompt with the best fit transcription
+        final_prompt = initial_prompt.replace("{previous_transcription}", best_fit_transcription.strip())
+        return final_prompt
+
+    async def prepare_initial_prompt(self, test_case: ExpTestCase, segment: ExpSegment) -> List[PromptData]:
+        """
+        Prepare the initial prompt for the transcription process. For dynamic prompts, the supported placeholders include: {previous_transcription}, {teamA}, {teamB}, {playerA}, {playerB}, {prompt_terms}
+
+        Args:
+            test_case (ExpTestCase): The test case object.
+            video_id (str): The video ID.
+
+        Returns:
+            List[PromptData]: A list of PromptData containing the initial prompt and token length.
         """
         try:
-            interim_prompt = prompt_template
+            # Initialize variables
+            initial_prompt = test_case.prompt_template
+            raw_initial_prompt = test_case.prompt_template
+            processed_initial_prompt = test_case.prompt_template
 
-            if not interim_prompt:
-                self.prompt_template = None
-                self.prompt_tokens = 0
-            elif not is_dynamic:
-                self.test_prompt = interim_prompt
-                return
-            
+            # Build initial_prompt with teams and players
+            if "{teamA}" in test_case.prompt_template or \
+                "{teamB}" in test_case.prompt_template or \
+                "{playerA}" in test_case.prompt_template or \
+                "{playerB}" in test_case.prompt_template:
+                # Retrieve teams and players from the database
+                teams, players = [] , []
+                teams_players = self.db_ops.get_teams_players(self.worker_name, segment.video_id)
+                if teams_players:
+                    for team in teams_players:
+                        teams.append(team[0])
+                        players.append(team[1])
+                    initial_prompt = f"{initial_prompt.replace("{teamA}", teams[0]).replace("{teamB}", teams[1]).replace("{playerA}", players[0]).replace("{playerB}", players[1])}"
+                    logger.debug(f"[{self.worker_name}] Interim prompt: {initial_prompt}")
+
+            # Build initial_prompt with previous transcription
+            if test_case.use_prev_transcription:
+                # Retrieve the previous transcription from the database
+                transcripts = self.db_ops.get_previous_transcription(self.worker_name, test_case.experiment_id, segment.segment_id)
+                if transcripts:
+                    processed_transcription = transcripts[0][1]
+                    logger.debug(f"[{self.worker_name}] Processed transcription:\n{processed_transcription}")
+                    raw_transcription = transcripts[1][1]
+                    logger.debug(f"[{self.worker_name}] Raw transcription:\n{raw_transcription}")
+
+                    # Build raw_initial_prompt
+                    raw_initial_prompt = await self.build_prompt(initial_prompt = initial_prompt, full_transcription = raw_transcription)
+                    # # Build processed_initial_prompt
+                    processed_initial_prompt = await self.build_prompt(initial_prompt = initial_prompt, full_transcription = processed_transcription)
+
+            if test_case.is_dynamic:
+                raw_tokens = await self.determine_token_length(raw_initial_prompt)
+                processed_tokens = await self.determine_token_length(processed_initial_prompt)
+                logger.debug(f"[{self.worker_name}] Raw initial prompt ({raw_tokens}):\n{raw_initial_prompt}")
+                logger.debug(f"[{self.worker_name}] Processed initial prompt ({processed_tokens}):\n{processed_initial_prompt}")
+
+                return PromptData(prompt=raw_initial_prompt, tokens=raw_tokens), PromptData(prompt=processed_initial_prompt, tokens=processed_tokens)
+
             else:
-                # # Replace placeholders in the prompt template
-                # # Supposrted placeholders include: {prompt_terms}, {previous_transcription}
-                # interim_prompt = interim_prompt.replace("{{previous_transcription}}", str(self.previous_transcription))
-                # interim_prompt = interim_prompt.replace("{{prompt_terms}}", str(self.prompt_terms))
-                self.test_prompt = interim_prompt
-                self.test_prompt_tokens = await self.determine_token_length(self.test_prompt)
+                tokens = await self.determine_token_length(initial_prompt)
 
-            logger.debug(f"[{self.worker_name}] Retrieving test prompt ID: \"{self.test_prompt}\"")
-            self.test_prompt_id = self.db_ops.insert_test_prompt(self.worker_name, self.test_prompt, self.test_prompt_tokens, experiment_test_case_id)
+                return PromptData(prompt=initial_prompt, tokens=tokens)
 
+        except ValueError as e:
+            logger.error(f"[{self.worker_name}] ValueError preparing initial prompt: {e}")
+            raise e
         except Exception as e:
             logger.error(f"[{self.worker_name}] Error preparing initial prompt: {e}")
+            raise e
 
     async def transcribe_audio(self, segment_id: int, audio_path: Path) -> None:
         """
@@ -89,7 +186,7 @@ class TranscriptionProcessor:
         try:
             # Transcribe the audio file with a prompt
             if self.test_prompt:
-                logger.debug(f"[{self.worker_name}] Transcribing with initial prompt (token length: {await self.determine_token_length(self.test_prompt)}: \"{self.test_prompt}\"")
+                logger.debug(f"[{self.worker_name}] Transcribing with initial prompt")
                 segments_generator, info = self.model.transcribe(str(audio_path), beam_size=5, word_timestamps=True, initial_prompt=self.test_prompt)
             
             # Transcribe the audio file without a prompt
@@ -103,7 +200,7 @@ class TranscriptionProcessor:
             segments = list(segments_generator)
             if not segments:
                 logger.error(f"[{self.worker_name}] No segments found for file: \"{audio_path}\"")
-                raise Exception(f"No segments found for file: \"{audio_path}\"")
+                raise Exception((f"No segments found for file: \"{audio_path}\""))
             else:
                 logger.debug(f"[{self.worker_name}] Number of segments: {len(segments)}")
                 for segment in segments:
