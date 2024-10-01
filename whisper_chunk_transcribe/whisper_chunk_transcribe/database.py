@@ -972,3 +972,71 @@ class DatabaseOperations(metaclass=SingletonMeta):
             except Exception as ex:
                 logger.error(f"[{worker_name}] Error in get_teams_players: {ex}")
                 raise  
+
+    def get_previous_transcription(self, worker_name: str, experiment_id: int, segment_id: int) -> tuple:
+        select_query = """
+            WITH current_segment AS (
+                SELECT 
+                    cs.video_id, 
+                    cs.segment_number
+                FROM 
+                    exp_experiment_segments ees
+                JOIN 
+                    audio_segments cs 
+                    ON ees.segment_id = cs.segment_id
+                WHERE TRUE
+                    AND ees.experiment_id = %s
+                    AND ees.segment_id = %s
+            ),
+            previous_segments AS (
+                SELECT 
+                    es.segment_id, 
+                    es.segment_number,
+                    es.raw_audio_path
+                FROM 
+                    audio_segments es
+                JOIN 
+                    current_segment cs 
+                    ON es.video_id = cs.video_id
+                WHERE 
+                    es.segment_number < cs.segment_number
+                ORDER BY 
+                    es.segment_number DESC
+            )
+            SELECT 
+                et.is_raw_audio,
+                STRING_AGG(ett.transcription_text, ' ') AS aggregated_transcription_text
+            FROM 
+                previous_segments ps
+            JOIN 
+                exp_tests et 
+                ON ps.segment_id = et.segment_id
+            JOIN 
+                exp_test_transcriptions ett 
+                ON et.test_id = ett.test_id
+            WHERE 
+                et.deleted_at IS NULL 
+                AND ett.deleted_at IS NULL
+            GROUP BY
+                et.is_raw_audio
+            ORDER BY 
+                et.is_raw_audio ASC;
+        """
+
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    logger.debug(f"[{worker_name}] Fetching previous transcripts for segment ID: {segment_id}")
+
+                    # Execute the query
+                    cursor.execute(select_query, (experiment_id,segment_id))
+                    records = cursor.fetchall()
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} transcript records from the database.")
+
+                    # Return the relevant fields as a list of tuples
+                    return [( record['is_raw_audio'], record['aggregated_transcription_text'] ) for record in records]
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in get_prev_transcript: {ex}")
+                raise  
+

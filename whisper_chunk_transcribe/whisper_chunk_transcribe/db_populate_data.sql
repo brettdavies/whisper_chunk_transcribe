@@ -122,7 +122,8 @@ inserted_test_cases AS (
         description,
         prompt_template,
         prompt_tokens,
-        is_dynamic
+        is_dynamic,
+        use_prev_transcription
         )
     VALUES
         (
@@ -131,6 +132,7 @@ inserted_test_cases AS (
             'Transcribe the audio without any additional prompt.',
             NULL,
             0,
+            FALSE,
             FALSE
         ),(
             (SELECT experiment_id FROM inserted_experiment),
@@ -138,6 +140,7 @@ inserted_test_cases AS (
             'Use an unrelated prompt to assess its impact on transcription accuracy.', 
             'A comprehensive guide to planting and maintaining a thriving home garden, tailored for both beginners and experienced gardeners. This audio will focus on essential gardening terms and practices that contribute to a successful and sustainable garden. Key terms include: soil preparation, the importance of testing soil pH, selecting quality seeds based on climate and season, understanding proper watering techniques to avoid overwatering or underwatering, ensuring adequate sunlight for different types of plants, effective pruning methods to encourage healthy growth, understanding various types of fertilizers and their application, the benefits of composting for soil enrichment, promoting healthy plant growth through nutrient management, harvesting crops at the right time for maximum flavor and yield, implementing integrated pest control strategies to protect plants from damage, monitoring plant health for early detection of diseases, the importance of mulch for moisture retention and weed control, principles of organic gardening that focus on sustainability, and cultivating a diverse array of plants such as vegetables, fruits, herbs, and flowers to create a vibrant and productive garden ecosystem. Mastering these concepts will not only enhance your gardening skills but also contribute to a more sustainable environment. Whether you are growing food for your family or beautifying your outdoor space, these practices will lead you toward gardening success.',
             247, -- python -m whisper_chunk_transcribe.run_determine_token_length "{prompt_template}"
+            FALSE,
             FALSE
         ),(
             (SELECT experiment_id FROM inserted_experiment),
@@ -145,6 +148,7 @@ inserted_test_cases AS (
             'Provide a general sports-related prompt without specific sports terminology.',
             'An overview of the fundamental concepts and strategies involved in various sports, emphasizing the importance of teamwork, discipline, and physical fitness. This guide will cover essential themes such as the significance of practice and preparation, understanding rules and regulations, developing skills and techniques, and the role of coaching and mentorship in athlete development. Key components include maintaining physical conditioning, fostering a positive mindset, enhancing communication among team members, and setting personal and collective goals. Additionally, the prompt will highlight the value of sportsmanship, respect for opponents, and the ability to handle both victories and defeats gracefully. Engaging in sports promotes not only physical health but also mental resilience and social interaction. It encourages individuals to push their limits, develop a sense of commitment, and build lasting relationships through shared experiences. Whether participating in recreational activities or competitive events, embracing these principles contributes to a fulfilling sports experience. By understanding the broader implications of sports in our lives, individuals can cultivate a lifelong appreciation for physical activity, personal growth, and the joy of movement, while also recognizing the impact of sports on community building and cultural exchange. This holistic approach will inspire athletes of all levels to strive for excellence and personal growth.',
             252, -- python -m whisper_chunk_transcribe.run_determine_token_length "{prompt_template}"
+            FALSE,
             FALSE
         ),(
             (SELECT experiment_id FROM inserted_experiment),
@@ -153,6 +157,7 @@ inserted_test_cases AS (
             -- Include the result from terms_prompt CTE
             'terms: pitcher, home run, inning, catcher, innings, fly ball, bases loaded, strikeout, batter, fastball, RBI, foul ball, second baseman, first baseman, shortstop, third baseman, left fielder, line drive, right fielder, center fielder, pitch count, double play, dugout, outfield, infield, at bat, grounder, pop fly, bullpen, umpire, changeup, pitch, relief pitcher, curveball, strike, bunt, sacrifice fly, designated hitter, slider, on deck, intentional walk, ERA, walk-off, foul tip, tag out, full count, no-hitter, pinch hitter, OBP, slugging percentage, pick-off, force out, sinker, pinch runner, perfect game, grand slam, fly out, balk, go-ahead run, mound visit, earned run, knuckleball, fielder''s choice, warning track, 1-2, 2-1, 2-2, 2-0, 3-1, 3-0, 3-2, 0-1, 0-2, 1-0, 1-1, run-down, shutout, caught looking, long ball, inside pitch, complete game'
             252, -- get this value and the terms above by running `python -m whisper_chunk_transcribe.update_prompt_terms` AFTER running the script above
+            FALSE,
             FALSE
         ),(
             (SELECT experiment_id FROM inserted_experiment),
@@ -160,13 +165,15 @@ inserted_test_cases AS (
             'Use a prompt that includes baseball terms and specific details about the game.',
             'The game between {team_a} and {team_b} is underway at {stadium_name}. Star players like {player_a} and {player_b} are expected to make significant impacts. Key terms: {prompt_terms}',
             NULL,
-            TRUE
+            TRUE,
+            FALSE
         ),(
             (SELECT experiment_id FROM inserted_experiment),
             'Previous Segment Transcription',
             'Use the transcription of the previous audio segment as the prompt.',
             '{previous_transcription}',
             NULL,
+            TRUE,
             TRUE
         ),(
             (SELECT experiment_id FROM inserted_experiment),
@@ -174,6 +181,7 @@ inserted_test_cases AS (
             'Combine the previous segment''s transcription with baseball-specific terms and game-specific details.',
             '{previous_transcription} Continuing the matchup between {team_a} and {team_b} at {stadium_name}. Notable players like {player_a} are showing impressive performances. Key terms: {prompt_terms}',
             NULL,
+            TRUE,
             TRUE
         )
 ),

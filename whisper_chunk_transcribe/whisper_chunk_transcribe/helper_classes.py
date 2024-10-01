@@ -2,6 +2,7 @@ import re
 import math
 from typing import List
 from pathlib import Path
+from loguru import logger
 from dataclasses import dataclass, field
 
 @dataclass
@@ -18,7 +19,49 @@ class ExpTestCase:
     test_case_id: int
     prompt_template: str
     prompt_tokens: int
-    is_dynamic: bool
+    test_prompt_id: int = field(default=None, init=False)  # Set when prompt is upserted into the database.
+    _is_dynamic: bool = field(default=False, init=False, repr=False)  # Internal field. Set post initialization.
+    _use_prev_transcription: bool = field(default=False, init=False, repr=False)  # Internal field. Set post initialization.
+
+    def __post_init__(self):
+        """
+        Post-initialization processing to set 'is_dynamic' and 'previous_transcription' based on 'prompt_template'.
+        """
+        if self.prompt_template:
+            if not isinstance(self.prompt_template, str):
+                raise ValueError(f"[ExpTestCase] prompt_template must be a string, got {type(self.prompt_template).__name__}")
+
+            # Regular expression to find all placeholders in the format {placeholder_name}
+            # Placeholder names consist of letters (case-insensitive) and digits
+            placeholder_pattern = r'\{([A-Za-z0-9_]+)\}'
+            detected_placeholders = re.findall(placeholder_pattern, self.prompt_template)
+
+            # Log detected placeholders
+            logger.debug(f"[ExpTestCase] Test Case {self.test_case_id}: Detected placeholders ({detected_placeholders})")
+
+            # Set 'is_dynamic' to True if any placeholders are found
+            if detected_placeholders:
+                self._is_dynamic = True
+                logger.debug(f"[ExpTestCase] Test Case {self.test_case_id}: `is_dynamic` set to True")
+
+            # Check for the presence of "{previous_transcription}" in the prompt_template
+            if "{previous_transcription}" in self.prompt_template:
+                self._use_prev_transcription = True
+                logger.debug(f"[ExpTestCase] Test Case {self.test_case_id}: `use_prev_transcription` set to True")
+
+    @property
+    def is_dynamic(self) -> bool:
+        """
+        Read-only property for 'is_dynamic'.
+        """
+        return self._is_dynamic
+
+    @property
+    def use_prev_transcription(self) -> bool:
+        """
+        Read-only property for 'use_prev_transcription'.
+        """
+        return self._use_prev_transcription
 
 @dataclass
 class TranscriptionWord:
