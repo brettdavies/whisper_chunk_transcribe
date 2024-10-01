@@ -2,7 +2,7 @@
 import os
 import psycopg2
 from psycopg2 import pool, extras
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from contextlib import contextmanager
 from psycopg2.extras import DictCursor
 from sshtunnel import SSHTunnelForwarder
@@ -145,6 +145,42 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 self.connection_pool.putconn(conn)
                 logger.debug(f"{"["+worker_name+"] " if worker_name else None}Database connection returned to the pool.")
 
+    def execute_query(self, worker_name: str, query: str, params: tuple, operation: str = 'fetch') -> Optional[Union[List[Dict], int]]:
+        """
+        Execute a database query.
+
+        Args:
+            worker_name (str): Name of the worker executing the query.
+            query (str): SQL query to execute.
+            params (tuple): Parameters for the SQL query.
+            operation (str): Type of operation ('fetch', 'commit', 'execute'). Defaults to 'fetch'.
+
+        Returns:
+            Optional[Union[List[Dict], int]]: Result of the query based on the operation type.
+        """
+        try:
+            with self.get_db_connection(worker_name) as conn:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    cursor.execute(query, params)
+                    
+                    if operation == 'fetch':
+                        return cursor.fetchall()
+                    elif operation == 'commit':
+                        conn.commit()
+                        return cursor.rowcount
+                    elif operation == 'execute':
+                        return cursor.rowcount
+                    else:
+                        logger.error(f"Unknown operation type: {operation}")
+                        return None
+        except psycopg2.Error as e:
+            logger.error(f"SQL Error when executing query: {e}")
+            if operation == 'commit':
+                conn.rollback()
+                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
+
+            return None
+
     def get_prompt_terms(self) -> List[str]:
         select_query = """
             SELECT term FROM prompt_terms;
@@ -172,21 +208,8 @@ class DatabaseOperations(metaclass=SingletonMeta):
             SET tokens = %s
             WHERE term = %s;
         """
-        with self.get_db_connection(None) as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"Setting token length for prompt: {prompt}")
-
-                    # Execute the query
-                    cursor.execute(update_query, (token_length, prompt))
-                    conn.commit()
-                    logger.info(f"Token length set for prompt: {prompt}")
-
-            except Exception as ex:
-                logger.error(f"Error in set_prompt_token_length: {ex}")
-                conn.rollback()
-                logger.debug("Transaction rolled back due to error.")
-                raise
+        params = (token_length, prompt)
+        self.execute_query(None, update_query, params, operation='commit')
 
     def insert_prompt_terms_bulk(self, prompt_terms_df: pd.DataFrame) -> None:
         """
@@ -234,24 +257,9 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 confusion_potential_score = EXCLUDED.confusion_potential_score,
                 tokens = EXCLUDED.tokens;
         """
-        with self.get_db_connection() as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"Connection acquired successfully for insert_prompt_terms_bulk.")
-
-                    # Execute the bulk insert using cursor.executemany
-                    cursor.executemany(insert_query, data_tuples)
-                    logger.info(f"Inserted/Updated {len(data_tuples)} records into 'prompt_terms' table.")
-
-                    # Commit the transaction
-                    conn.commit()
-                    logger.debug(f"Transaction committed successfully.")
-
-            except Exception as ex:
-                logger.error(f"Error in insert_prompt_terms_bulk: {ex}")
-                conn.rollback()
-                logger.debug(f"Transaction rolled back due to error.")
-                raise
+        params = [(term, in_game_usage_score, general_speech_score, impact_transcription_score, confusion_potential_score, tokens)
+                  for term, in_game_usage_score, general_speech_score, impact_transcription_score, confusion_potential_score, tokens in data_tuples]
+        self.execute_query(None, insert_query, params, operation='commit')
 
     def insert_audio_segment_df(self, audio_segments_df: pd.DataFrame, worker_name: str) -> None:
         """
@@ -305,24 +313,9 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 raw_audio_path = EXCLUDED.raw_audio_path,
                 processed_audio_path = EXCLUDED.processed_audio_path;
         """
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_audio_segment_df.")
-
-                    # Execute the bulk insert using cursor.executemany
-                    cursor.executemany(insert_query, data_tuples)
-                    logger.info(f"[{worker_name}] Inserted / Updated {len(data_tuples)} segments.")
-
-                    # Commit the transaction
-                    conn.commit()
-                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in insert_audio_segment_df: {ex}")
-                conn.rollback()
-                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
-                raise
+        params = [(video_id, segment_number, start_time, end_time, raw_audio_path, processed_audio_path)
+                  for video_id, segment_number, start_time, end_time, raw_audio_path, processed_audio_path in data_tuples]
+        self.execute_query(worker_name, insert_query, params, operation='commit')
 
     def get_exp_video_ids(self, experiment_id: int, worker_name: str) -> List[str]:
         """
@@ -341,22 +334,13 @@ class DatabaseOperations(metaclass=SingletonMeta):
             WHERE e_vids.experiment_id = %s;
         """
 
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching video local paths for experiment ID: {experiment_id}")
+        params = (experiment_id,)
 
-                    # Execute the query
-                    cursor.execute(select_query, (experiment_id,))
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
-
-                    # Extract 'local_path' from each record
-                    return [record['local_path'] for record in records]
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in get_exp_video_ids: {ex}")
-                raise
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            return [record['local_path'] for record in result]
+        else:
+            return []
 
     def get_audio_segments_no_snr(self, worker_name: str, batch_size: int) -> List[dict]:
         """
@@ -378,22 +362,13 @@ class DatabaseOperations(metaclass=SingletonMeta):
             LIMIT %s;  -- Using LIMIT for batch size
         """
 
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching audio segments with no SNR value")
+        params = (batch_size,)
 
-                    # Execute the query
-                    cursor.execute(select_query, (batch_size,)) # Pass the batch size as a parameter
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
-
-                    # Return the relevant fields in a dictionary format
-                    return [{'segment_id': record['segment_id'], 'raw_audio_path': record['raw_audio_path'], 'processed_audio_path': record['processed_audio_path']} for record in records]
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in get_audio_segments_no_snr: {ex}")
-                raise
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            return [{'segment_id': record['segment_id'], 'raw_audio_path': record['raw_audio_path'], 'processed_audio_path': record['processed_audio_path']} for record in result]
+        else:
+            return []
 
     def insert_audio_segment_snr(self, audio_segments_df: pd.DataFrame, worker_name: str) -> None:
         """
@@ -437,24 +412,8 @@ class DatabaseOperations(metaclass=SingletonMeta):
             ON CONFLICT (segment_id) DO UPDATE SET
                 snr = EXCLUDED.snr
         """
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_audio_segment_snr.")
-
-                    # Execute the bulk insert using cursor.executemany
-                    cursor.executemany(insert_query, data_tuples)
-                    logger.info(f"[{worker_name}] Inserted / Updated {len(data_tuples)} snr values.")
-
-                    # Commit the transaction
-                    conn.commit()
-                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in insert_audio_segment_snr: {ex}")
-                conn.rollback()
-                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
-                raise
+        params = [(segment_id, snr) for segment_id, snr in data_tuples]
+        self.execute_query(worker_name, insert_query, params, operation='commit')
 
     def get_most_recent_modified_exp_id(self, worker_name: str) -> int:
         select_query = """
@@ -463,22 +422,8 @@ class DatabaseOperations(metaclass=SingletonMeta):
             ORDER BY modified_at DESC
             LIMIT 1;
         """
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching most recently modified experiment ID")
-
-                    # Execute the query
-                    cursor.execute(select_query)
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
-
-                    # Return the relevant fields in a dictionary format
-                    return records[0]['experiment_id']
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] SQL Error in get_most_recent_modified_exp_id: {ex}")
-                raise
+        params = ()
+        return self.execute_query(worker_name, select_query, params, operation='fetch')
 
     def get_exp_experiment_test_cases(self, worker_name: str, experiment_id: int) -> List[ExpTestCase]:
         select_query = """
@@ -487,22 +432,12 @@ class DatabaseOperations(metaclass=SingletonMeta):
             WHERE tc.experiment_id = %s
             ORDER BY tc.test_case_id;
         """
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching test cases for experiment ID: {experiment_id}")
-
-                    # Execute the query
-                    cursor.execute(select_query, (experiment_id,))
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} test cases from the database for experiment {experiment_id}.")
-
-                    # Return the relevant fields in a dictionary format
-                    return [ExpTestCase(experiment_id, record['test_case_id'], record['prompt_template'], record['prompt_tokens']) for record in records]
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] SQL Error in get_exp_experiment_test_cases: {ex}")
-                raise
+        params = (experiment_id,)
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            return [ExpTestCase(experiment_id, record['test_case_id'], record['prompt_template'], record['prompt_tokens']) for record in result]
+        else:
+            return []
 
     def get_exp_experiment_segments(self, worker_name: str, experiment_id: int, is_dynamic: bool) -> List[ExpSegment]:
         select_query = """
@@ -516,22 +451,12 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 AND exp_tc.use_prev_transcription = %s
             ORDER BY seg.segment_id ASC;
         """
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching test segments for experiment ID: {experiment_id}")
-
-                    # Execute the query
-                    cursor.execute(select_query, (experiment_id, is_dynamic))
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} test segment records from the database.")
-
-                    # Return the relevant fields in a dictionary format
-                    return [ExpSegment(record['segment_id'], record['video_id'], record['raw_audio_path'], record['processed_audio_path'], record['test_case_id']) for record in records]
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] SQL Error in get_exp_experiment_segments: {ex}")
-                raise
+        params = (experiment_id, is_dynamic)
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            return [ExpSegment(record['segment_id'], record['video_id'], record['raw_audio_path'], record['processed_audio_path'], record['test_case_id']) for record in result]
+        else:
+            return []
 
     def insert_test_prompt(self, worker_name: str, prompt: str, prompt_tokens: int, experiment_test_case_id: int) -> int:
         select_query = """
@@ -543,61 +468,25 @@ class DatabaseOperations(metaclass=SingletonMeta):
         insert_query = """
             INSERT INTO exp_test_prompts (prompt, prompt_tokens, experiment_test_case_id)
             VALUES (%s, %s, %s)
+            ON CONFLICT (prompt, prompt_tokens, experiment_test_case_id) DO UPDATE SET
+                prompt = EXCLUDED.prompt
             RETURNING test_prompt_id;
         """
-        with self.get_db_connection(worker_name=worker_name) as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_test_prompt.")
+        params = (prompt, prompt_tokens, experiment_test_case_id)
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            test_prompt_id = result[0]['test_prompt_id']
+            logger.info(f"[{worker_name}] Test prompt already exists with id: {test_prompt_id}")
+            return test_prompt_id
 
-                    # 1. Check for Existing Record
-                    cursor.execute(select_query, (prompt, prompt_tokens, experiment_test_case_id))
-                    result = cursor.fetchone()
-
-                    if result:
-                        test_prompt_id = result[0]
-                        logger.info(f"[{worker_name}] Test prompt already exists with id: {test_prompt_id}")
-                        return test_prompt_id
-
-                    # 2. Insert New Record
-                    cursor.execute(insert_query, (prompt, prompt_tokens, experiment_test_case_id))
-                    insert_result = cursor.fetchone()
-
-                    if insert_result:
-                        test_prompt_id = insert_result[0]
-                        logger.info(f"[{worker_name}] Test prompt inserted with id: {test_prompt_id}")
-                        conn.commit()
-                        logger.debug(f"[{worker_name}] Transaction committed successfully.")
-                        return test_prompt_id
-                    else:
-                        logger.error(f"[{worker_name}] Insert operation did not return test_prompt_id.")
-                        conn.rollback()
-                        logger.debug(f"[{worker_name}] Transaction rolled back due to missing test_prompt_id.")
-                        raise Exception(f"[{worker_name}] Failed to insert test_prompt_id.")
-
-            except psycopg2.IntegrityError as ie:
-                # Handle race condition: another process might have inserted the same record
-                conn.rollback()
-                logger.warning(f"[{worker_name}] IntegrityError occurred: {ie}. Retrying SELECT.")
-                try:
-                    with conn.cursor() as retry_cursor:
-                        retry_cursor.execute(select_query, (prompt, prompt_tokens, experiment_test_case_id))
-                        retry_result = retry_cursor.fetchone()
-                        if retry_result:
-                            test_prompt_id = retry_result[0]
-                            logger.info(f"Test prompt already exists after IntegrityError with id: {test_prompt_id}")
-                            return test_prompt_id
-                        else:
-                            logger.error(f"[{worker_name}] Retry SELECT did not find the test_prompt_id.")
-                            raise Exception("Failed to insert or retrieve test_prompt_id after IntegrityError.")
-                except Exception as ex_inner:
-                    logger.error(f"[{worker_name}] Error during retry SELECT: {ex_inner}")
-                    raise
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in insert_test_prompt: {ex}")
-                conn.rollback()
-                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
-                raise
+        result = self.execute_query(worker_name, insert_query, params, operation='commit')
+        if result:
+            test_prompt_id = result[0]['test_prompt_id']
+            logger.info(f"[{worker_name}] Test prompt inserted with id: {test_prompt_id}")
+            return test_prompt_id
+        else:
+            logger.error(f"[{worker_name}] Insert operation did not return test_prompt_id.")
+            raise Exception(f"[{worker_name}] Failed to insert test_prompt_id.")
 
     def insert_exp_test(self, worker_name: str, test_case: ExpTestCase, segment_id: int, is_raw_audio: bool, average_probability: float, average_avg_logprob: float) -> int:
         insert_query = """
@@ -616,37 +505,20 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 average_avg_logprob = EXCLUDED.average_avg_logprob
             RETURNING test_id;
         """
-        with self.get_db_connection(worker_name) as conn:
-            test_id = None
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test.")
-
-                    cursor.execute(insert_query, (
-                        test_case.experiment_id,
-                        segment_id,
-                        test_case.test_case_id,
-                        test_case.test_prompt_id,
-                        is_raw_audio,
-                        average_probability,
-                        average_avg_logprob
-                    ))
-                    test_id = cursor.fetchone()[0]
-                    logger.debug(f"[{worker_name}] Inserted / Updated Test ID: {test_id}.")
-
-                    # Commit the transaction
-                    conn.commit()
-                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in insert_exp_test: {ex}")
-                conn.rollback()
-                test_id = None
-                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
-                raise
-
-            finally:
-                return test_id
+        params = (
+            test_case.experiment_id,
+            segment_id,
+            test_case.test_case_id,
+            test_case.test_prompt_id,
+            is_raw_audio,
+            average_probability,
+            average_avg_logprob
+        )
+        result = self.execute_query(worker_name, insert_query, params, operation='fetch')
+        if result:
+            return result[0]['test_id']
+        else:
+            return None
 
     def insert_exp_test_transcriptions(self, worker_name: str, test_id: int, transcription_text: str) -> None:
         insert_query = """
@@ -657,27 +529,8 @@ class DatabaseOperations(metaclass=SingletonMeta):
             VALUES (%s, %s)
             ON CONFLICT (test_id) DO NOTHING;
         """
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test_transcriptions.")
-
-                    cursor.execute(insert_query, (
-                        test_id,
-                        transcription_text
-                    ))
-                    logger.debug(f"[{worker_name}] Inserted test transcript: {test_id}.")
-
-                    # Commit the transaction
-                    conn.commit()
-                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in insert_exp_test_transcriptions: {ex}")
-                conn.rollback()
-                test_id = None
-                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
-                raise
+        params = (test_id, transcription_text)
+        self.execute_query(worker_name, insert_query, params, operation='commit')
 
     def insert_exp_test_transcription_segments(self, worker_name: str, test_id: int, segments: List[TranscriptionSegment]) -> None:
         insert_query = """
@@ -704,29 +557,9 @@ class DatabaseOperations(metaclass=SingletonMeta):
             logger.warning(f"[{worker_name}] No data to insert into 'exp_test_transcription_segments'. Exiting method.")
             return
 
-        with self.get_db_connection(worker_name) as conn:
-            test_id = None
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test_transcription_segments.")
-
-                    # Execute the bulk insert using cursor.executemany
-                    cursor.executemany(insert_query, data_tuples)
-                    logger.info(f"[{worker_name}] Inserted transcription segment values.")
-
-                    # Commit the transaction
-                    conn.commit()
-                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in insert_exp_test_transcription_segments: {ex}")
-                conn.rollback()
-                test_id = None
-                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
-                raise
-
-            finally:
-                return test_id
+        params = [(test_id, segment_number, segment_text, avg_logprob, start_time, end_time)
+                  for test_id, segment_number, segment_text, avg_logprob, start_time, end_time in data_tuples]
+        self.execute_query(worker_name, insert_query, params, operation='commit')
 
     def insert_exp_test_transcription_words(self, worker_name: str, test_id: int, words: List[TranscriptionWord]) -> None:
         insert_query = """
@@ -754,29 +587,9 @@ class DatabaseOperations(metaclass=SingletonMeta):
             logger.warning(f"[{worker_name}] No data to insert into 'exp_test_transcription_words'. Exiting method.")
             return
 
-        with self.get_db_connection(worker_name) as conn:
-            test_id = None
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug(f"[{worker_name}] Connection acquired successfully for insert_exp_test_transcription_words.")
-
-                    # Execute the bulk insert using cursor.executemany
-                    cursor.executemany(insert_query, data_tuples)
-                    logger.info(f"[{worker_name}] Inserted transcription segment values.")
-
-                    # Commit the transaction
-                    conn.commit()
-                    logger.debug(f"[{worker_name}] Transaction committed successfully.")
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in insert_exp_test_transcription_words: {ex}")
-                conn.rollback()
-                test_id = None
-                logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
-                raise
-
-            finally:
-                return test_id
+        params = [(test_id, word_number, word_text, start_time, end_time, probability)
+                  for test_id, word_number, word_text, start_time, end_time, probability in data_tuples]
+        self.execute_query(worker_name, insert_query, params, operation='commit')
 
     def get_exp_video_espn_map(self, worker_name: str) -> tuple:
         select_query = """
@@ -787,122 +600,85 @@ class DatabaseOperations(metaclass=SingletonMeta):
             JOIN video_espn_mapping AS map ON map.yt_id = exp_vid.video_id;
         """
 
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching audio segments with no SNR value")
-
-                    # Execute the query
-                    cursor.execute(select_query)
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
-
-                    # Return the relevant fields as a list of tuples
-                    return [(record['yt_id'], record['espn_id']) for record in records]
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in get_audio_segments_no_snr: {ex}")
-                raise  
+        params = ()
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            return [(record['yt_id'], record['espn_id']) for record in result]
+        else:
+            return []
 
     def upsert_game_data(self, worker_name: str, game: Game) -> None:
-        # Connect to the database
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                # Create a cursor object
-                cursor = conn.cursor()
+        # Prepare bulk upsert for teams using a dictionary to keep the last occurrence
+        teams_data = {
+            (team.team_id, team.display_name): team.abbreviation  # Use a tuple of (team_id, display_name) as the key
+            for team in game.get_upsert_teams()
+        }
 
-                # Prepare bulk upsert for teams using a dictionary to keep the last occurrence
-                teams_data = {
-                    (team.team_id, team.display_name): team.abbreviation  # Use a tuple of (team_id, display_name) as the key
-                    for team in game.get_upsert_teams()
-                }
+        # Convert back to a list of tuples
+        teams_data = [(team_id, display_name, abbreviation) for (team_id, display_name), abbreviation in teams_data.items()]
+        
+        # Upsert Teams in bulk
+        if teams_data:
+            teams_query = """
+                INSERT INTO e_teams (team_id, display_name, abbreviation)
+                VALUES %s
+                ON CONFLICT (team_id) 
+                DO UPDATE SET
+                    display_name = EXCLUDED.display_name,
+                    abbreviation = EXCLUDED.abbreviation;
+            """
+            self.execute_query(worker_name, teams_query, teams_data, operation='commit')
+            logger.debug(f"[{worker_name}] Upserted {len(teams_data)} teams.")
 
-                # Convert back to a list of tuples
-                teams_data = [(team_id, display_name, abbreviation) for (team_id, display_name), abbreviation in teams_data.items()]
-                
-                # Upsert Teams in bulk
-                if teams_data:
-                    extras.execute_values(
-                        cursor,
-                        """
-                        INSERT INTO e_teams (team_id, display_name, abbreviation)
-                        VALUES %s
-                        ON CONFLICT (team_id) 
-                        DO UPDATE SET
-                            display_name = EXCLUDED.display_name,
-                            abbreviation = EXCLUDED.abbreviation;
-                        """,
-                        teams_data
-                    )
-                    logger.debug(f"[{worker_name}] Upserted {len(teams_data)} teams.")
+        # Prepare bulk upsert for players using a dictionary to keep the last occurrence
+        players_data_dict = {
+            player.player_id: player.name  # Use player_id as key and player.name as value
+            for player in game.get_upsert_players()
+        }
 
-                # Prepare bulk upsert for players using a dictionary to keep the last occurrence
-                players_data_dict = {
-                    player.player_id: player.name  # Use player_id as key and player.name as value
-                    for player in game.get_upsert_players()
-                }
+        # Convert back to a list of tuples
+        players_data = [(player_id, name) for player_id, name in players_data_dict.items()]
 
-                # Convert back to a list of tuples
-                players_data = [(player_id, name) for player_id, name in players_data_dict.items()]
+        # Upsert Players in bulk
+        if players_data:
+            players_query = """
+                INSERT INTO e_players (player_id, name)
+                VALUES %s
+                ON CONFLICT (player_id) 
+                DO UPDATE SET
+                    name = EXCLUDED.name;
+            """
+            self.execute_query(worker_name, players_query, players_data, operation='commit')
+            logger.debug(f"[{worker_name}] Upserted {len(players_data)} players.")
 
-                # Upsert Players in bulk
-                if players_data:
-                    extras.execute_values(
-                        cursor,
-                        """
-                        INSERT INTO e_players (player_id, name)
-                        VALUES %s
-                        ON CONFLICT (player_id) 
-                        DO UPDATE SET
-                            name = EXCLUDED.name;
-                        """,
-                        players_data
-                    )
-                    logger.debug(f"[{worker_name}] Upserted {len(players_data)} players.")
+        # Insert Game Record
+        game_query = """
+            INSERT INTO e_games (video_id, espn_id, home_team_id, away_team_id)
+            VALUES %s
+            RETURNING game_id;
+        """
+        game_id = self.execute_query(worker_name, game_query, [(game.video_id, game.espn_id, game.home_team.team_id, game.away_team.team_id)], operation='fetch')[0]['game_id']
+        
+        logger.debug(f"[{worker_name}] Inserted game record with ID: {game_id}")
 
-                # Insert Game Record
-                extras.execute_values(
-                    cursor,
-                    """
-                    INSERT INTO e_games (video_id, espn_id, home_team_id, away_team_id)
-                    VALUES %s
-                    RETURNING game_id;
-                    """,
-                    [(game.video_id, game.espn_id, game.home_team.team_id, game.away_team.team_id)]  # Wrap the tuple in a list
-                )
-                
-                # Get the newly created game_id
-                game_id = cursor.fetchone()[0]
-                logger.debug(f"[{worker_name}] Inserted game record with ID: {game_id}")
+        # Upsert Game Players in bulk using a dictionary to keep the last occurrence
+        game_players_dict = {
+            (player.player_id, player.team_id): game_id  # Use a tuple of (player_id, team_id) as the key
+            for player in game.get_upsert_players()
+        }
 
-                # Upsert Game Players in bulk using a dictionary to keep the last occurrence
-                game_players_dict = {
-                    (player.player_id, player.team_id): game_id  # Use a tuple of (player_id, team_id) as the key
-                    for player in game.get_upsert_players()
-                }
+        # Convert back to a list of tuples
+        game_players_data = [(game_id, player_id, team_id) for (player_id, team_id), game_id in game_players_dict.items()]
 
-                # Convert back to a list of tuples
-                game_players_data = [(game_id, player_id, team_id) for (player_id, team_id), game_id in game_players_dict.items()]
-
-                if game_players_data:
-                    extras.execute_values(
-                        cursor,
-                        """
-                        INSERT INTO e_game_players (game_id, player_id, team_id)
-                        VALUES %s
-                        ON CONFLICT (game_id, player_id, team_id) 
-                        DO NOTHING;
-                        """,
-                        game_players_data
-                    )
-                    logger.debug(f"[{worker_name}] Upserted {len(game_players_data)} game players.")
-
-                # Commit the transaction
-                conn.commit()
-            except psycopg2.Error as e:
-                logger.error(f"SQL Error when writing data for game {game.video_id}:\n{e}")
-                conn.rollback()
-                raise
+        if game_players_data:
+            game_players_query = """
+                INSERT INTO e_game_players (game_id, player_id, team_id)
+                VALUES %s
+                ON CONFLICT (game_id, player_id, team_id) 
+                DO NOTHING;
+            """
+            self.execute_query(worker_name, game_players_query, game_players_data, operation='commit')
+            logger.debug(f"[{worker_name}] Upserted {len(game_players_data)} game players.")
 
     def get_teams_players(self, worker_name: str, video_id: str) -> tuple:
         select_query = """
@@ -932,22 +708,13 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 team_name;
         """
 
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching teams and players for video ID: {video_id}")
+        params = (video_id,)
 
-                    # Execute the query
-                    cursor.execute(select_query, (video_id,))
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} teams and player records from the database.")
-
-                    # Return the relevant fields as a list of tuples
-                    return [( record['team_name'], record['players']) for record in records]
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in get_teams_players: {ex}")
-                raise  
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            return [(record['team_name'], record['players']) for record in result]
+        else:
+            return []
 
     def get_previous_transcription(self, worker_name: str, experiment_id: int, segment_id: int) -> tuple:
         select_query = """
@@ -999,20 +766,9 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 et.is_raw_audio ASC;
         """
 
-        with self.get_db_connection(worker_name) as conn:
-            try:
-                with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching previous transcripts for segment ID: {segment_id}")
-
-                    # Execute the query
-                    cursor.execute(select_query, (experiment_id,segment_id))
-                    records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} transcript records from the database.")
-
-                    # Return the relevant fields as a list of tuples
-                    return [( record['is_raw_audio'], record['aggregated_transcription_text'] ) for record in records]
-
-            except Exception as ex:
-                logger.error(f"[{worker_name}] Error in get_prev_transcript: {ex}")
-                raise  
-
+        params = (experiment_id, segment_id)
+        result = self.execute_query(worker_name, select_query, params)
+        if result:
+            return [(record['is_raw_audio'], record['aggregated_transcription_text']) for record in result]
+        else:
+            return []

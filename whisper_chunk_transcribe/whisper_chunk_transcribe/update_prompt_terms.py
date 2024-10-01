@@ -25,30 +25,17 @@ class ExtendedDatabaseOperations(DatabaseOperations):
             WHERE experiment_id = %s
             ORDER BY final_score DESC;
         """
-        try:
-            with self.get_db_connection(None) as conn:
-                try:
-                    with conn.cursor() as cursor:
-                        print("Fetching prompt terms from the database.")
+        print("Fetching prompt terms from the database.")
 
-                        # Execute the query
-                        cursor.execute(select_query, (experiment_id,))
-                        records = cursor.fetchall()
-                        print(f"Retrieved {len(records)} records from the database.")
+        # Execute the query
+        params = (experiment_id,)
+        records = self.execute_query("TestWorker", select_query, params)
 
-                        # Extract 'term' from each record
-                        return [record[0] for record in records]
-
-                except Exception as ex:
-                    print(f"Error in get_exp_experiment_prompt_terms: {ex}")
-                    raise
-                    
-                print(f"Retrieved {len(video_files)} video files.")
-                return video_files
+        # Extract 'term' from each record
+        video_files = [record[0] for record in records]
             
-        except psycopg2.Error as e:
-            print(f"SQL Error when retrieving video file information: {e}")
-            raise  # Re-raise the exception for the caller to handle
+        print(f"Retrieved {len(video_files)} video files.")
+        return video_files            
 
 async def main(config: ExperimentConfig) -> None:
     # Initialize the Whisper model
