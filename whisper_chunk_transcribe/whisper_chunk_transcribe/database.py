@@ -188,30 +188,6 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 logger.debug("Transaction rolled back due to error.")
                 raise
 
-    def get_exp_experiment_prompt_terms(self, experiment_id: int) -> List[str]:
-        select_query = """
-            SELECT term
-            FROM exp_experiment_prompt_terms
-            WHERE experiment_id = %s
-            ORDER BY final_score DESC;
-        """
-        with self.get_db_connection(None) as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug("Fetching prompt terms from the database.")
-
-                    # Execute the query
-                    cursor.execute(select_query, (experiment_id,))
-                    records = cursor.fetchall()
-                    logger.debug(f"Retrieved {len(records)} records from the database.")
-
-                    # Extract 'term' from each record
-                    return [record[0] for record in records]
-
-            except Exception as ex:
-                logger.error(f"Error in get_prompt_terms: {ex}")
-                raise
-
     def insert_prompt_terms_bulk(self, prompt_terms_df: pd.DataFrame) -> None:
         """
         Insert or update prompt terms in bulk from a pandas DataFrame into the 'prompt_terms' table.
