@@ -11,6 +11,48 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- 1.2. Trigger Function to Manage Video ESPN Mapping
+CREATE OR REPLACE FUNCTION manage_video_espn_mapping()
+RETURNS TRIGGER AS $$
+DECLARE
+    espn_id INTEGER;
+    existing_record RECORD;
+BEGIN
+    -- Extract espn_id from the local_path
+    SELECT (REGEXP_MATCHES(NEW.local_path, '{e-(\d+)}'))[1]::INTEGER INTO espn_id
+    WHERE NEW.local_path ILIKE '%{e-%';
+
+    -- Check for an existing record
+    SELECT * INTO existing_record 
+    FROM video_espn_mapping 
+    WHERE yt_id = NEW.video_id AND espn_id = espn_id;
+
+    IF NOT FOUND THEN
+        -- If no existing record, insert a new one
+        INSERT INTO video_espn_mapping (yt_id, espn_id, created_at, modified_at)
+        VALUES (NEW.video_id, espn_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+    ELSIF existing_record IS NOT NULL THEN
+        IF existing_record.espn_id = espn_id THEN
+            -- If the existing record and new record are the same, update modified_at
+            UPDATE video_espn_mapping
+            SET modified_at = CURRENT_TIMESTAMP
+            WHERE yt_id = NEW.video_id AND espn_id = espn_id;
+        ELSE
+            -- If the existing and new records differ, soft delete the existing record
+            UPDATE video_espn_mapping
+            SET deleted_at = CURRENT_TIMESTAMP
+            WHERE yt_id = NEW.video_id AND espn_id = existing_record.espn_id;
+
+            -- Insert the new record
+            INSERT INTO video_espn_mapping (yt_id, espn_id, created_at, modified_at)
+            VALUES (NEW.video_id, espn_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- ================================================
 -- 2. Table Definitions
 -- ================================================
@@ -321,7 +363,113 @@ CREATE TRIGGER trg_exp_test_transcription_words_modified_at
   FOR EACH ROW
   EXECUTE FUNCTION update_modified_at_column();
 
+-- 2.4. VIDEO MAPPING SCHEMA
 
+-- 2.4.1. Create video_espn_mapping Table
+CREATE TABLE video_espn_mapping (
+    yt_id VARCHAR NOT NULL REFERENCES yt_metadata(video_id),
+    espn_id INTEGER NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (yt_id, espn_id),
+    UNIQUE (yt_id, espn_id)
+);
+
+-- Indexes for video_espn_mapping
+CREATE INDEX idx_yt_id ON video_espn_mapping (yt_id);
+CREATE INDEX idx_espn_id ON video_espn_mapping (espn_id);
+
+-- Trigger to update mapping
+CREATE TRIGGER trg_manage_video_espn_mapping
+AFTER INSERT OR UPDATE ON yt_video_file
+FOR EACH ROW EXECUTE FUNCTION manage_video_espn_mapping();
+
+
+-- 2.5. ESPN SCHEMA
+
+-- 2.5.1. Create e_teams table
+CREATE TABLE e_teams (
+    team_id SERIAL PRIMARY KEY,
+    display_name VARCHAR NOT NULL,
+    abbreviation VARCHAR NOT NULL UNIQUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Indexes for e_teams
+CREATE INDEX idx_e_teams_display_name ON e_teams(display_name);
+CREATE UNIQUE INDEX e_teams_abbreviation_unique ON e_teams(abbreviation);
+
+-- Trigger to update modified_at on e_teams
+CREATE TRIGGER trg_e_teams_modified_at
+BEFORE UPDATE ON e_teams
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_at_column();
+
+-- 2.5.2 Create e_players table
+CREATE TABLE e_players (
+    player_id SERIAL PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Indexes for e_players
+CREATE INDEX idx_e_players_name ON e_players(name);
+
+-- Trigger to update modified_at on e_players
+CREATE TRIGGER trg_e_players_modified_at
+BEFORE UPDATE ON e_players
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_at_column();
+
+-- 2.5.3 Create e_games table
+CREATE TABLE e_games (
+    game_id SERIAL PRIMARY KEY,
+    video_id VARCHAR NOT NULL UNIQUE REFERENCES yt_metadata(video_id),
+    espn_id INT NOT NULL,
+    home_team_id INT REFERENCES e_teams(team_id),
+    away_team_id INT REFERENCES e_teams(team_id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Indexes for e_games
+CREATE UNIQUE INDEX e_games_video_id_unique ON e_games(video_id);
+CREATE INDEX idx_e_games_espn_id ON e_games(video_id);
+
+-- Trigger to update modified_at on e_games
+CREATE TRIGGER trg_e_games_modified_at
+BEFORE UPDATE ON e_games
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_at_column();
+
+-- 2.5.4 Create e_game_players table
+CREATE TABLE e_game_players (
+    game_player_id SERIAL PRIMARY KEY,
+    game_id INT REFERENCES e_games(game_id),
+    player_id INT REFERENCES e_players(player_id),
+    team_id INT REFERENCES e_teams(team_id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT unique_game_players UNIQUE (game_id, player_id, team_id)
+);
+
+-- Indexes for e_game_players
+CREATE INDEX idx_e_game_players_game_id ON e_game_players(game_id);
+CREATE INDEX idx_e_game_players_player_id ON e_game_players(player_id);
+CREATE INDEX idx_e_game_players_team_id ON e_game_players(team_id);
+
+-- Trigger to update modified_at on e_game_players
+CREATE TRIGGER trg_e_game_players_modified_at
+BEFORE UPDATE ON e_game_players
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_at_column();
 
 
 -- ================================================

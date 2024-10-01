@@ -1,7 +1,7 @@
 # Standard Libraries
 import os
 import psycopg2
-from psycopg2 import pool
+from psycopg2 import pool, extras
 from typing import Any, Dict, List, Optional
 from contextlib import contextmanager
 from psycopg2.extras import DictCursor
@@ -16,7 +16,7 @@ import pandas as pd
 import threading
 
 # First Party Libraries
-from .helper_classes import ExpSegment, ExpTestCase, TranscriptionSegment, TranscriptionWord, Transcription
+from .helper_classes import ExpSegment, ExpTestCase, TranscriptionSegment, TranscriptionWord, Game
 
 # Load environment variables from .env file
 load_dotenv()
@@ -157,7 +157,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
                     # Execute the query
                     cursor.execute(select_query)
                     records = cursor.fetchall()
-                    logger.debug(f"Retrieved {len(records)} records from the database.")
+                    logger.debug(f"Retrieved {len(records)} prompt term records from the database.")
 
                     # Extract 'term' from each record
                     return [record[0] for record in records]
@@ -506,9 +506,8 @@ class DatabaseOperations(metaclass=SingletonMeta):
 
     def get_exp_experiment_test_cases(self, worker_name: str, experiment_id: int) -> List[ExpTestCase]:
         select_query = """
-            SELECT tc.test_case_id, tp.test_prompt_id, tc.prompt_template, tc.prompt_tokens, tc.is_dynamic
+            SELECT tc.test_case_id, tc.prompt_template, tc.prompt_tokens
             FROM exp_experiment_test_cases tc
-            JOIN exp_test_prompts tp ON tp.experiment_test_case_id = tc.test_case_id
             WHERE tc.experiment_id = %s
             ORDER BY tc.test_case_id;
         """
@@ -523,7 +522,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
                     logger.debug(f"[{worker_name}] Retrieved {len(records)} test cases from the database for experiment {experiment_id}.")
 
                     # Return the relevant fields in a dictionary format
-                    return [ExpTestCase(experiment_id, record['test_case_id'], record['test_prompt_id'], record['prompt_template'], record['prompt_tokens'], record['is_dynamic']) for record in records]
+                    return [ExpTestCase(experiment_id, record['test_case_id'], record['prompt_template'], record['prompt_tokens']) for record in records]
 
             except Exception as ex:
                 logger.error(f"[{worker_name}] SQL Error in get_exp_experiment_test_cases: {ex}")
@@ -531,35 +530,37 @@ class DatabaseOperations(metaclass=SingletonMeta):
 
     def get_exp_experiment_segments(self, worker_name: str, experiment_id: int, is_dynamic: bool) -> List[ExpSegment]:
         select_query = """
-            SELECT seg.segment_id, seg.raw_audio_path, seg.processed_audio_path, exp_seg.test_case_id
+            SELECT seg.segment_id, seg.video_id, seg.raw_audio_path, seg.processed_audio_path, exp_seg.test_case_id
             FROM exp_experiment_segments AS exp_seg
             JOIN audio_segments AS seg ON seg.segment_id = exp_seg.segment_id
             JOIN exp_experiment_test_cases AS exp_tc ON exp_tc.test_case_id = exp_seg.test_case_id
+            JOIN e_games AS game ON game.video_id = seg.video_id
             WHERE TRUE
                 AND exp_seg.experiment_id = %s
-                AND exp_tc.is_dynamic = %s
-            ORDER BY seg.segment_id;
+                AND exp_tc.use_prev_transcription = %s
+            ORDER BY seg.segment_id ASC;
         """
         with self.get_db_connection(worker_name) as conn:
             try:
                 with conn.cursor(cursor_factory=DictCursor) as cursor:
-                    logger.debug(f"[{worker_name}] Fetching experiment segments for experiment ID: {experiment_id}")
+                    logger.debug(f"[{worker_name}] Fetching test segments for experiment ID: {experiment_id}")
 
                     # Execute the query
                     cursor.execute(select_query, (experiment_id, is_dynamic))
                     records = cursor.fetchall()
-                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} test segment records from the database.")
 
                     # Return the relevant fields in a dictionary format
-                    return [ExpSegment(record['segment_id'], record['raw_audio_path'], record['processed_audio_path'], record['test_case_id']) for record in records]
+                    return [ExpSegment(record['segment_id'], record['video_id'], record['raw_audio_path'], record['processed_audio_path'], record['test_case_id']) for record in records]
 
             except Exception as ex:
-                logger.error(f"[{worker_name}] SQL Error in get_exp_segments: {ex}")
+                logger.error(f"[{worker_name}] SQL Error in get_exp_experiment_segments: {ex}")
                 raise
 
     def insert_test_prompt(self, worker_name: str, prompt: str, prompt_tokens: int, experiment_test_case_id: int) -> int:
         select_query = """
-            SELECT test_prompt_id FROM exp_test_prompts
+            SELECT test_prompt_id
+            FROM exp_test_prompts
             WHERE (prompt IS NOT DISTINCT FROM %s) AND prompt_tokens = %s AND experiment_test_case_id = %s AND deleted_at IS NULL
             LIMIT 1;
         """
@@ -579,7 +580,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
 
                     if result:
                         test_prompt_id = result[0]
-                        logger.info(f"Test prompt already exists with id: {test_prompt_id}")
+                        logger.info(f"[{worker_name}] Test prompt already exists with id: {test_prompt_id}")
                         return test_prompt_id
 
                     # 2. Insert New Record
@@ -588,7 +589,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
 
                     if insert_result:
                         test_prompt_id = insert_result[0]
-                        logger.info(f"Test prompt inserted with id: {test_prompt_id}")
+                        logger.info(f"[{worker_name}] Test prompt inserted with id: {test_prompt_id}")
                         conn.commit()
                         logger.debug(f"[{worker_name}] Transaction committed successfully.")
                         return test_prompt_id
@@ -596,7 +597,7 @@ class DatabaseOperations(metaclass=SingletonMeta):
                         logger.error(f"[{worker_name}] Insert operation did not return test_prompt_id.")
                         conn.rollback()
                         logger.debug(f"[{worker_name}] Transaction rolled back due to missing test_prompt_id.")
-                        raise Exception("Failed to insert test_prompt_id.")
+                        raise Exception(f"[{worker_name}] Failed to insert test_prompt_id.")
 
             except psycopg2.IntegrityError as ie:
                 # Handle race condition: another process might have inserted the same record
@@ -800,3 +801,174 @@ class DatabaseOperations(metaclass=SingletonMeta):
 
             finally:
                 return test_id
+
+    def get_exp_video_espn_map(self, worker_name: str) -> tuple:
+        select_query = """
+            SELECT
+                map.yt_id,
+                map.espn_id
+            FROM exp_experiment_videos AS exp_vid
+            JOIN video_espn_mapping AS map ON map.yt_id = exp_vid.video_id;
+        """
+
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    logger.debug(f"[{worker_name}] Fetching audio segments with no SNR value")
+
+                    # Execute the query
+                    cursor.execute(select_query)
+                    records = cursor.fetchall()
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} records from the database.")
+
+                    # Return the relevant fields as a list of tuples
+                    return [(record['yt_id'], record['espn_id']) for record in records]
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in get_audio_segments_no_snr: {ex}")
+                raise  
+
+    def upsert_game_data(self, worker_name: str, game: Game) -> None:
+        # Connect to the database
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                # Create a cursor object
+                cursor = conn.cursor()
+
+                # Prepare bulk upsert for teams using a dictionary to keep the last occurrence
+                teams_data = {
+                    (team.team_id, team.display_name): team.abbreviation  # Use a tuple of (team_id, display_name) as the key
+                    for team in game.get_upsert_teams()
+                }
+
+                # Convert back to a list of tuples
+                teams_data = [(team_id, display_name, abbreviation) for (team_id, display_name), abbreviation in teams_data.items()]
+                
+                # Upsert Teams in bulk
+                if teams_data:
+                    extras.execute_values(
+                        cursor,
+                        """
+                        INSERT INTO e_teams (team_id, display_name, abbreviation)
+                        VALUES %s
+                        ON CONFLICT (team_id) 
+                        DO UPDATE SET
+                            display_name = EXCLUDED.display_name,
+                            abbreviation = EXCLUDED.abbreviation;
+                        """,
+                        teams_data
+                    )
+                    logger.debug(f"[{worker_name}] Upserted {len(teams_data)} teams.")
+
+                # Prepare bulk upsert for players using a dictionary to keep the last occurrence
+                players_data_dict = {
+                    player.player_id: player.name  # Use player_id as key and player.name as value
+                    for player in game.get_upsert_players()
+                }
+
+                # Convert back to a list of tuples
+                players_data = [(player_id, name) for player_id, name in players_data_dict.items()]
+
+                # Upsert Players in bulk
+                if players_data:
+                    extras.execute_values(
+                        cursor,
+                        """
+                        INSERT INTO e_players (player_id, name)
+                        VALUES %s
+                        ON CONFLICT (player_id) 
+                        DO UPDATE SET
+                            name = EXCLUDED.name;
+                        """,
+                        players_data
+                    )
+                    logger.debug(f"[{worker_name}] Upserted {len(players_data)} players.")
+
+                # Insert Game Record
+                extras.execute_values(
+                    cursor,
+                    """
+                    INSERT INTO e_games (video_id, espn_id, home_team_id, away_team_id)
+                    VALUES %s
+                    RETURNING game_id;
+                    """,
+                    [(game.video_id, game.espn_id, game.home_team.team_id, game.away_team.team_id)]  # Wrap the tuple in a list
+                )
+                
+                # Get the newly created game_id
+                game_id = cursor.fetchone()[0]
+                logger.debug(f"[{worker_name}] Inserted game record with ID: {game_id}")
+
+                # Upsert Game Players in bulk using a dictionary to keep the last occurrence
+                game_players_dict = {
+                    (player.player_id, player.team_id): game_id  # Use a tuple of (player_id, team_id) as the key
+                    for player in game.get_upsert_players()
+                }
+
+                # Convert back to a list of tuples
+                game_players_data = [(game_id, player_id, team_id) for (player_id, team_id), game_id in game_players_dict.items()]
+
+                if game_players_data:
+                    extras.execute_values(
+                        cursor,
+                        """
+                        INSERT INTO e_game_players (game_id, player_id, team_id)
+                        VALUES %s
+                        ON CONFLICT (game_id, player_id, team_id) 
+                        DO NOTHING;
+                        """,
+                        game_players_data
+                    )
+                    logger.debug(f"[{worker_name}] Upserted {len(game_players_data)} game players.")
+
+                # Commit the transaction
+                conn.commit()
+            except psycopg2.Error as e:
+                logger.error(f"SQL Error when writing data for game {game.video_id}:\n{e}")
+                conn.rollback()
+                raise
+
+    def get_teams_players(self, worker_name: str, video_id: str) -> tuple:
+        select_query = """
+            WITH teams_players AS (
+                SELECT 
+                    t.display_name AS team_name,
+                    p.name AS player_name,
+                    g.game_id
+                FROM 
+                    e_games g
+                JOIN 
+                    e_teams t ON t.team_id IN (g.home_team_id, g.away_team_id)
+                JOIN 
+                    e_game_players gp ON gp.game_id = g.game_id
+                    AND gp.team_id = t.team_id
+                JOIN 
+                    e_players p ON p.player_id = gp.player_id
+                WHERE 
+                    g.video_id = %s
+            )
+            SELECT 
+                team_name, 
+                STRING_AGG(player_name, ', ') AS players
+            FROM 
+                teams_players
+            GROUP BY 
+                team_name;
+        """
+
+        with self.get_db_connection(worker_name) as conn:
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as cursor:
+                    logger.debug(f"[{worker_name}] Fetching teams and players for video ID: {video_id}")
+
+                    # Execute the query
+                    cursor.execute(select_query, (video_id,))
+                    records = cursor.fetchall()
+                    logger.debug(f"[{worker_name}] Retrieved {len(records)} teams and player records from the database.")
+
+                    # Return the relevant fields as a list of tuples
+                    return [( record['team_name'], record['players']) for record in records]
+
+            except Exception as ex:
+                logger.error(f"[{worker_name}] Error in get_teams_players: {ex}")
+                raise  

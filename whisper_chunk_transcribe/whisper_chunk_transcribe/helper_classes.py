@@ -1,11 +1,13 @@
+import re
 import math
 from typing import List
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class ExpSegment:
     segment_id: int
+    video_id: str
     raw_audio_path: Path
     processed_audio_path: Path
     test_case_id: int
@@ -14,7 +16,6 @@ class ExpSegment:
 class ExpTestCase:
     experiment_id: int
     test_case_id: int
-    test_prompt_id: int
     prompt_template: str
     prompt_tokens: int
     is_dynamic: bool
@@ -58,3 +59,35 @@ def compute_average_logprob(segments: List[TranscriptionSegment]) -> float:
     avg_logprob = math.log(avg_probability)
     
     return avg_logprob
+
+@dataclass
+class Team:
+    team_id: int
+    display_name: str
+    abbreviation: str
+
+@dataclass
+class Player:
+    player_id: int
+    name: str
+    team_id: int = None  # Can be set during upsert if needed
+
+@dataclass
+class Game:  # Class representing a game
+    video_id: str
+    espn_id: int
+    home_team: Team
+    away_team: Team
+    home_players: List[Player] = field(default_factory=list)
+    away_players: List[Player] = field(default_factory=list)
+
+    def get_upsert_teams(self):
+        return [self.home_team, self.away_team]
+
+    def get_upsert_players(self):
+        return self.home_players + self.away_players
+
+@dataclass
+class PromptData:
+    prompt: str
+    tokens: int
