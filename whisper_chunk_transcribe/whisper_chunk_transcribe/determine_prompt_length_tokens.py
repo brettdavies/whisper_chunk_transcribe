@@ -10,7 +10,7 @@ class DatabaseOperations:
 
 async def main(prompt_to_tokenize):
     # Initialize the Whisper model
-    model = WhisperModel('/media/bigdaddy/data/cache_model/faster-distil-whisper-medium.en')  # Replace 'model_name' with your actual model name
+    model = WhisperModel('/cache_model/faster-distil-whisper-medium.en')  # Replace a different model name as required
 
     # Initialize the database operations stub class
     db_ops = DatabaseOperations()

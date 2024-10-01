@@ -16,13 +16,28 @@ def process_audio_sync(worker_name: str, source_file_path: Path, model_for_vad: 
     Args:
         worker_name (str): Identifier for the worker.
         source_file_path (Path): Path to the source audio file.
-        model_dir (Path): Directory containing the model.
+        model_for_vad (Path): Path to the VAD model file.
         output_dir (Path): Directory to store output files.
     
     Returns:
         None
     """
     async def runner() -> None:
+        """
+        Asynchronous function that processes audio files.
+
+        This function performs the following steps:
+        1. Transforms the source file to WAV format.
+        2. Creates Voice Activity Detection (VAD) segments from the audio file.
+        3. Segments the audio based on VAD.
+        4. Calculates Signal-to-Noise Ratio (SNR) for each segment.
+
+        Raises:
+            Exception: If an error occurs during the audio processing.
+
+        Returns:
+            None
+        """
         db_ops = DatabaseOperations()
         try:
             audio_processor = AudioProcessor(model_for_vad, source_file_path, output_dir, worker_name, db_ops)

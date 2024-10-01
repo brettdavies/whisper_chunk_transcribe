@@ -1,7 +1,7 @@
 # Standard Libraries
 import os
 from pathlib import Path
-from typing import List, Tuple
+from typing import Tuple
 
 # Logging
 from loguru import logger
@@ -91,7 +91,7 @@ class Utils:
             raise e    
 
     @staticmethod
-    def extract_video_info_filepath(filepath: str) -> Tuple[str, str]:
+    async def extract_video_info_filepath(filepath: str) -> Tuple[str, str]:
         file_name_parts = filepath.split('{')
         video_id = None
         a_format_id = None

@@ -30,25 +30,46 @@ class QueueManager:
 
 @dataclass(slots=True)
 class PrepareAudio:
+    """
+    Class for preparing and processing audio files.
+
+    Attributes:
+        queue_manager (QueueManager): The queue manager instance.
+        db_ops (DatabaseOperations): The database operations instance.
+        logger (Any): The logger instance.
+
+    Methods:
+        __init__(): Initializes the PrepareAudio class.
+        worker(): Worker coroutine that processes audio files from the queue.
+        fetch(): Fetches and processes audio files using multiple workers.
+
+        Initializes the PrepareAudio class.
+    """
     queue_manager: QueueManager
     db_ops: DatabaseOperations
     logger: Any
 
     def __init__(self):
         """
-        Initializes the Fetcher with a QueueManager and DatabaseOperations instance.
+        Initializes the PrepareAudio class.
+
+        Args:
+            None
+
+        Returns:
+            None
         """
         self.logger = logger
         self.queue_manager = QueueManager()
         self.db_ops = DatabaseOperations()
 
     async def worker(
-            self, 
-            worker_id: int, 
-            model_for_vad: Path, 
-            output_dir: Path, 
-            executor: ProcessPoolExecutor
-        ) -> None:
+        self, 
+        worker_id: int, 
+        model_for_vad: Path, 
+        output_dir: Path, 
+        executor: ProcessPoolExecutor
+    ) -> None:
         """
         Worker coroutine that processes audio files from the queue.
 

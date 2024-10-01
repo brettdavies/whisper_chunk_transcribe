@@ -18,7 +18,66 @@ from .helper_classes import TranscriptionWord, TranscriptionSegment, Transcripti
 load_dotenv()
 
 class TranscriptionProcessor:
+    """
+    Class responsible for processing transcriptions.
+        worker_name (str): The name of the worker.
+        model (WhisperModel): The Whisper model.
+        db_ops (DatabaseOperations): The database operations object.
+    Attributes:
+        worker_name (str): The name of the worker.
+        db_ops (DatabaseOperations): The database operations object.
+        model (WhisperModel): The Whisper model.
+        tokenizer (Hugging Face Tokenizer): The tokenizer used by the model.
+        test_prompt_id (int): The ID of the test prompt.
+        test_prompt (str): The test prompt.
+        test_prompt_tokens (int): The number of tokens in the test prompt.
+        transcription (Transcription): The transcription object.
+    Methods:
+        determine_token_length: Determines the length of tokens for specific words and phrases.
+        set_initial_prompt: Sets the initial prompt for the transcription process.
+        build_prompt: Builds the initial prompt by adding words from the end of the full transcription.
+        prepare_initial_prompt: Prepares the initial prompt for the transcription process.
+        transcribe_audio: Transcribes the audio file for a given segment.
+        Initializes a new instance of the TranscriptionProcessor class.
+            worker_name (str): The name of the worker.
+            model (WhisperModel): The Whisper model.
+            db_ops (DatabaseOperations): The database operations object.
+        Determines the length of tokens for specific words and phrases.
+            prompt_to_tokenize: The prompt to tokenize.
+            int: The number of tokens in the prompt.
+        ...
+        Sets the initial prompt for the transcription process.
+            test_prompt_id (int): The ID of the test prompt.
+            test_prompt (str): The test prompt.
+            test_prompt_tokens (int): The number of tokens in the test prompt.
+        ...
+        Builds the initial prompt by adding words from the end of the full transcription.
+            initial_prompt (str): The template prompt containing the placeholder {previous_transcription}.
+            full_transcription (str): The complete transcription text.
+            max_tokens (int): The maximum allowed number of tokens.
+            initial_step (int): Number of words to add initially.
+            step_decrement (int): Number to decrement the step by when the token limit is exceeded.
+            str: The constructed prompt with previous_transcription inserted.
+        ...
+        Prepares the initial prompt for the transcription process.
+            segment (ExpSegment): The segment object.
+        ...
+        Transcribes the audio file for a given segment.
+            segment_id (int): The ID of the segment.
+            audio_path (Path): The path to the audio file.
+        """
     def __init__(self, worker_name: str, model: WhisperModel, db_ops: DatabaseOperations) -> None:
+        """
+        Initializes a TranscriptionProcessor object.
+
+        Args:
+            worker_name (str): The name of the worker.
+            model (WhisperModel): The WhisperModel object used for transcription.
+            db_ops (DatabaseOperations): The DatabaseOperations object used for database operations.
+
+        Returns:
+            None
+        """
         self.worker_name: str = worker_name
         self.db_ops = db_ops
         self.model = model
@@ -28,35 +87,51 @@ class TranscriptionProcessor:
         self.test_prompt_tokens: int = 0
         self.transcription: Transcription = None
 
-    async def determine_token_length(self, prompt_to_tokenize) -> int:
+    async def determine_token_length(self, prompt_to_tokenize: str) -> int:
         """
-        Determine the length of tokens for specific words and phrases.
+        Determines the length of tokens for specific words and phrases.
+
+        Args:
+            prompt_to_tokenize (str): The prompt to tokenize.
+
+        Returns:
+            int: The number of tokens in the prompt.
         """
         tokens = len(self.tokenizer.encode(prompt_to_tokenize))
-        # logger.debug(f"[{self.worker_name}] {tokens} tokens in prompt: \"{prompt_to_tokenize}\"")
         return tokens
 
     async def set_initial_prompt(self, test_prompt_id: int, test_prompt: str, test_prompt_tokens: int) -> None:
+        """
+        Sets the initial prompt for the transcription processor.
+
+        Args:
+            test_prompt_id (int): The ID of the test prompt.
+            test_prompt (str): The text of the test prompt.
+            test_prompt_tokens (int): The number of tokens in the test prompt.
+
+        Returns:
+            None
+        """
         self.test_prompt_id = test_prompt_id
         self.test_prompt = test_prompt
         self.test_prompt_tokens = test_prompt_tokens
 
     async def build_prompt(self, initial_prompt: str, full_transcription: str, max_tokens: int = 255, initial_step: int = 10, step_decrement: int = 1) -> str:
         """
-        Builds the initial_prompt by adding words from the end of full_transcription.
+        Builds the initial prompt by adding words from the end of the full transcription.
         Starts by adding 'initial_step' words at a time.
-        If adding 'initial_step' words exceeds max_tokens, decrement the step by 'step_decrement' and try again.
+        If adding 'initial_step' words exceeds 'max_tokens', decrement the step by 'step_decrement' and try again.
         Continues until the token limit is reached without exceeding it.
 
         Args:
-            initial_prompt: The template prompt containing the placeholder {previous_transcription}
-            full_transcription: The complete transcription text
-            max_tokens: The maximum allowed number of tokens
-            initial_step: Number of words to add initially
-            step_decrement: Number to decrement the step by when the token limit is exceeded
+            initial_prompt (str): The template prompt containing the placeholder {previous_transcription}.
+            full_transcription (str): The complete transcription text.
+            max_tokens (int, optional): The maximum allowed number of tokens. Defaults to 255.
+            initial_step (int, optional): Number of words to add initially. Defaults to 10.
+            step_decrement (int, optional): Number to decrement the step by when the token limit is exceeded. Defaults to 1.
 
         Returns:
-            The constructed prompt with previous_transcription inserted
+            str: The constructed prompt with {previous_transcription} inserted.
         """
         words = full_transcription.split()
         total_words = len(words)
@@ -106,14 +181,14 @@ class TranscriptionProcessor:
 
     async def prepare_initial_prompt(self, test_case: ExpTestCase, segment: ExpSegment) -> List[PromptData]:
         """
-        Prepare the initial prompt for the transcription process. For dynamic prompts, the supported placeholders include: {previous_transcription}, {teamA}, {teamB}, {playerA}, {playerB}, {prompt_terms}
+        Prepare the initial prompt for the transcription process.
 
         Args:
             test_case (ExpTestCase): The test case object.
-            video_id (str): The video ID.
+            segment (ExpSegment): The segment object.
 
         Returns:
-            List[PromptData]: A list of PromptData containing the initial prompt and token length.
+            List[PromptData]: A list of PromptData objects containing the initial prompt and token length.
         """
         try:
             # Initialize variables
@@ -171,17 +246,16 @@ class TranscriptionProcessor:
             logger.error(f"[{self.worker_name}] Error preparing initial prompt: {e}")
             raise e
 
-    async def transcribe_audio(self, segment_id: int, audio_path: Path) -> None:
+    async def transcribe_audio(self, audio_path: Path) -> None:
         """
-        Transcribe the raw and processed audio files for a given segment.
-        The function writes the transcription, word-level confidence scores, 
-        and segment-level confidence scores to separate files.
+        Transcribes the audio file for a given segment.
 
-        Parameters:
-        None
+        Args:
+            segment_id (int): The ID of the segment.
+            audio_path (Path): The path to the audio file.
 
         Returns:
-        None
+            None
         """
         try:
             # Transcribe the audio file with a prompt
@@ -264,6 +338,13 @@ class TranscriptionProcessor:
             # with open(segment_confidence_file, 'w') as f:
             #     json.dump(segment_confidences, f, indent=4)
             # logger.debug(f"[{self.worker_name}] Segment-level confidence scores written to: \"{segment_confidence_file}\"")
+
+        except ValueError as e:
+            logger.error(f"[{self.worker_name}] ValueError processing file {audio_path}: {e}")
+            raise e
+        except FileNotFoundError as e:
+            logger.error(f"[{self.worker_name}] File not found error processing file {audio_path}: {e}")
+            raise e
         except Exception as e:
             logger.error(f"[{self.worker_name}] Error processing file {audio_path}: {e}")
             raise e

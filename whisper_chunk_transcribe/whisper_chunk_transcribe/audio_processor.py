@@ -23,6 +23,19 @@ from .database import DatabaseOperations
 
 class AudioProcessor:
     def __init__(self, model_for_vad: Path, source_file_path: Path, output_dir: Path, worker_name: str, db_ops: DatabaseOperations) -> None:
+        """
+        Initializes an instance of the AudioProcessor class.
+
+        Args:
+            model_for_vad (Path): The path to the VAD model.
+            source_file_path (Path): The path to the source file.
+            output_dir (Path): The path to the output directory.
+            worker_name (str): The name of the worker.
+            db_ops (DatabaseOperations): An instance of the DatabaseOperations class.
+
+        Returns:
+            None
+        """
         self.db_ops = db_ops
         self.worker_name = worker_name
         logger.debug(f"[{self.worker_name}] Worker: {self.worker_name}")
@@ -31,10 +44,7 @@ class AudioProcessor:
         logger.debug(f"[{self.worker_name}] VAD Model Dir: {self.model_for_vad}")
 
         self.output_dir = output_dir
-        logger.debug(f"[{self.worker_name}] Output Dir: {self.output_dir}")
-
         self.source_file_path = source_file_path
-        logger.debug(f"[{self.worker_name}] Source File Path: {self.source_file_path}")
 
         # Set file name and extension from the source file path
         self.source_file_name = self.source_file_path.name
@@ -46,7 +56,7 @@ class AudioProcessor:
         logger.debug(f"[{self.worker_name}] Source File Ext: {self.source_file_extension}")
 
         # Extract video_id
-        self.video_id, _ = Utils.extract_video_info_filepath(self.file_name_noext)
+        self.video_id, _ = asyncio.run(self.extract_video_id())
         logger.debug(f"[{self.worker_name}] File Video ID: {self.video_id}")
 
         self.output_file_extension = ".wav"
@@ -57,25 +67,25 @@ class AudioProcessor:
         logger.debug(f"[{self.worker_name}] Output File Name: {self.output_file_name}")
 
         self.output_file_dir = self.output_dir / self.video_id
-        logger.debug(f"[{self.worker_name}] Output File Dir: {self.output_file_dir}")
-
         self.output_original_file_dir = self.output_file_dir / "original"
-        logger.debug(f"[{self.worker_name}] Output Original File Dir: {self.output_original_file_dir}")
-
         self.output_processed_file_dir = self.output_file_dir / "processed"
-        logger.debug(f"[{self.worker_name}] Output Processed File Dir: {self.output_processed_file_dir}")
-
         self.original_segment_file_path = self.output_original_file_dir / "segments"
-        logger.debug(f"[{self.worker_name}] Output Original Segments File Dir: {self.original_segment_file_path}")
-
         self.processed_segment_file_path = self.output_processed_file_dir / "segments"
-        logger.debug(f"[{self.worker_name}] Output Processed Segments File Dir: {self.processed_segment_file_path}")
+
+        # Validate and create directories if they do not exist
+        self.output_file_dir = asyncio.run(Utils.validate_and_create_dir(self.output_file_dir, 'OUTPUT_FILE_DIR', True))
+        self.output_original_file_dir = asyncio.run(Utils.validate_and_create_dir(self.output_original_file_dir, 'OUTPUT_ORIGINAL_FILE_DIR', True))
+        self.output_processed_file_dir = asyncio.run(Utils.validate_and_create_dir(self.output_processed_file_dir, 'OUTPUT_PROCESSED_FILE_DIR', True))
+        self.original_segment_file_path = asyncio.run(Utils.validate_and_create_dir(self.original_segment_file_path, 'ORIGINAL_SEGMENT_FILE_PATH', True))
+        self.processed_segment_file_path = asyncio.run(Utils.validate_and_create_dir(self.processed_segment_file_path, 'PROCESSED_SEGMENT_FILE_PATH', True))
+
+        # Log directory paths
+        self.log_directory_paths()
 
         # Construct full output paths
         self.output_file_original_path_name = self.output_original_file_dir / self.output_file_name
-        logger.debug(f"[{self.worker_name}] Output File Original Path Name: {self.output_file_original_path_name}")
-
         self.output_file_processed_path_name = self.output_processed_file_dir / self.output_file_name
+        logger.debug(f"[{self.worker_name}] Output File Original Path Name: {self.output_file_original_path_name}")
         logger.debug(f"[{self.worker_name}] Output File Processed Path Name: {self.output_file_processed_path_name}")
 
         # Set device for torch based on CUDA availability
@@ -84,6 +94,18 @@ class AudioProcessor:
 
         # self.torch_dtype = "float16" if torch.cuda.is_available() else "float32"
         # logger.debug(f"[{self.worker_name}] Using PyTorch dtype: {self.torch_dtype}")
+
+    def log_directory_paths(self) -> None:
+        logger.debug(f"[{self.worker_name}] Output Dir: {self.output_dir}")
+        logger.debug(f"[{self.worker_name}] Source File Path: {self.source_file_path}")
+        logger.debug(f"[{self.worker_name}] Output File Dir: {self.output_file_dir}")
+        logger.debug(f"[{self.worker_name}] Output Original File Dir: {self.output_original_file_dir}")
+        logger.debug(f"[{self.worker_name}] Output Processed File Dir: {self.output_processed_file_dir}")
+        logger.debug(f"[{self.worker_name}] Output Original Segments File Dir: {self.original_segment_file_path}")
+        logger.debug(f"[{self.worker_name}] Output Processed Segments File Dir: {self.processed_segment_file_path}")
+
+    async def extract_video_id(self) -> str:
+        return await asyncio.to_thread(Utils.extract_video_info_filepath, self.file_name_noext)
 
     async def transform_source2wav(self) -> None:
         """
@@ -112,16 +134,28 @@ class AudioProcessor:
                 
                 # Save the processed waveform to a WAV file
                 await self.save_waveform_to_wav(waveform=reduced_noise_waveform, sample_rate=sample_rate, is_original=False)
-            
+
+        except (FileNotFoundError, IOError) as e:
+            logger.error(f"[{self.worker_name}] Error processing audio file: {e}")
+
         except Exception as e:
             logger.error(f"[{self.worker_name}] Error in transform_source2wav: {e}")
 
     async def load_vad_pipeline(self) -> VoiceActivityDetection:
         """
         Load the Voice Activity Detection (VAD) pipeline.
+        
+        Raises:
+        - Exception: If there is an error loading the VAD pipeline.
 
         Returns:
         - pipeline (VoiceActivityDetection): The loaded VAD pipeline.
+
+        Notes:
+        - This method loads the VAD pipeline by initializing the segmentation model and creating a VoiceActivityDetection object.
+        - The VAD pipeline is used for detecting voice activity in audio data.
+        - The model for VAD is specified by the `model_for_vad` attribute of the class.
+        - The device for running the VAD pipeline can be specified using the `device` attribute of the class.
         """
         try:
             # Path to the model directory
@@ -149,12 +183,12 @@ class AudioProcessor:
         """
         Process the given WAV file and segment it using voice activity detection (VAD).
 
-        Parameters:
-        None
-        
         Returns:
-        - Annotation
-            An Annotation object containing the segments of detected speech.
+        None
+
+        Raises:
+        - ValueError: If the vad attribute is not an Annotation object.
+        - Exception: If there is an error during the segmentation process.
         """
         try:
             # Generate the output file path for the VAD results
@@ -215,8 +249,7 @@ class AudioProcessor:
     async def update_segment_df(self, segment_df: pd.DataFrame, segment_number: int, start_time, end_time, segment_file_path: str, is_original: bool) -> pd.DataFrame:
         """
         Updates the segment_df DataFrame by adding a new row or updating an existing one based on self.video_id and segment_number.
-        Handles relative file paths by prepending the execution path if the file is not found.
-
+        
         Parameters:
         - segment_df (pd.DataFrame): The DataFrame to update.
         - segment_number (int): The segment number.
@@ -278,8 +311,7 @@ class AudioProcessor:
         None
 
         Returns:
-        - segment_file_path: str
-            The filepath where the segments were saved.
+        None
         """
         logger.info(f"[{self.worker_name}] Segmenting audio based on VAD results for \"{self.video_id}\"")
         
@@ -366,18 +398,27 @@ class AudioProcessor:
             logger.error(f"[{self.worker_name}] Error during segmenting: {e}")
             raise ValueError(f"[{self.worker_name}] Segment file path is invalid")
 
-    async def load_and_resample_audio(self, target_sample_rate=16000) -> tuple[np.ndarray, int]:
+    async def load_and_resample_audio(self, target_sample_rate: int = 16000) -> tuple[np.ndarray, int]:
         """
         Load the source audio file and resample it to the target sample rate.
-        
+
         Parameters:
         - target_sample_rate (int): The desired sample rate for the resampled audio. Default is 16000 (16kHz).
-        
+
         Returns:
         - waveform (np.ndarray): The resampled audio waveform as a numpy array.
         - target_sample_rate (int): The actual sample rate of the resampled audio.
-        """
 
+        Raises:
+        - Exception: If there is an error loading or resampling the audio.
+
+        Notes:
+        - This method loads the source audio file specified by the `source_file_path` attribute of the class.
+        - The audio is resampled using the `target_sample_rate` parameter.
+        - The resampled audio waveform is returned as a numpy array.
+        - The actual sample rate of the resampled audio is also returned.
+        - If there is an error during the loading or resampling process, an exception is raised.
+        """
         try:
             logger.info(f"[{self.worker_name}] Loading and resampling audio from \"{self.video_id}\" to {target_sample_rate} Hz")
             # Load the audio file using PyDub
@@ -417,9 +458,15 @@ class AudioProcessor:
         - np.ndarray
             The waveform after applying the Wiener filter.
 
-        Note:
+        Raises:
+        - ValueError: If the waveform is not a numpy.ndarray.
+        - ValueError: If the epsilon value is not a float.
+
+        Notes:
         - The Wiener filter is used to enhance the quality of a signal by reducing noise.
         - If the cleaned waveform is all zeros, a warning message will be logged.
+        - The waveform must be a numpy.ndarray.
+        - The epsilon value must be a float.
         """
         logger.info(f"[{self.worker_name}] Applying Wiener filter to the waveform")
         if not isinstance(waveform, np.ndarray):
@@ -441,14 +488,21 @@ class AudioProcessor:
         Apply a non-stationary noise reduction filter using the noisereduce library.
 
         Parameters:
-        - waveform: np.ndarray
-            The input waveform to apply noise reduction on.
-        - sample_rate: int
-            The sample rate of the waveform.
+        - waveform (np.ndarray): The input waveform to apply noise reduction on.
+        - sample_rate (int): The sample rate of the waveform.
 
         Returns:
-        - np.ndarray
-            The waveform after applying the non-stationary noise reduction filter.
+        - np.ndarray: The waveform after applying the non-stationary noise reduction filter.
+
+        Raises:
+        - ValueError: If the waveform is not a numpy.ndarray.
+        - ValueError: If the sample_rate is not an int.
+
+        Notes:
+        - The non-stationary noise reduction filter is used to reduce noise in the input waveform.
+        - The waveform must be a numpy.ndarray.
+        - The sample_rate must be an int.
+        - If there is an error during the noise reduction process, the original waveform is returned.
         """
         logger.info(f"[{self.worker_name}] Applying non-stationary noise reduction to the waveform")
         if not isinstance(waveform, np.ndarray):
@@ -468,14 +522,22 @@ class AudioProcessor:
         Save the waveform as a WAV file with the specified sample rate using scipy.io.wavfile.
         
         Parameters:
-        - waveform: np.ndarray
-            The waveform data to be saved as a WAV file.
-        - sample_rate: int
-            The sample rate of the waveform.
-        - amplification_factor: float, optional
-            The amplification factor to apply to the waveform. Default is 2.0.
+        - waveform (np.ndarray): The waveform data to be saved as a WAV file.
+        - sample_rate (int): The sample rate of the waveform.
+        - is_original (bool): Flag indicating if the waveform is the original audio.
+        - amplification_factor (float, optional): The amplification factor to apply to the waveform. Default is 2.0.
+        
+        Returns:
+        None
+        
+        Raises:
+        - ValueError: If the waveform is not a numpy.ndarray.
+        
+        Notes:
+        - This method saves the waveform as a WAV file using the specified sample rate.
+        - The waveform must be a numpy.ndarray.
+        - The amplification_factor can be used to increase the volume of the waveform.
         """
-
         out_dir: str = None
         out_filepath: str = None
 
@@ -513,10 +575,17 @@ class AudioProcessor:
 
     async def calculate_snr(self) -> None:
         """
-        Calculate Signal-to-Noise Ratio (SNR) for each record in segment_df and update the database in batches.
+        Calculate the Signal-to-Noise Ratio (SNR) for each record in the segment_df DataFrame.
+        Update the database with the calculated SNR values in batches.
+
+        Parameters:
+        None
 
         Returns:
-            None
+        None
+
+        Raises:
+        None
         """
         try:
             # Define batch size
@@ -561,50 +630,62 @@ class AudioProcessor:
             logger.error(f"[{self.worker_name}] Error calculating SNR: {e}")
 
     @staticmethod
-    async def compute_snr(raw_audio_path: Path, processed_audio_path: Path) -> float:
+    async def compute_snr(self, raw_audio_path: Path, processed_audio_path: Path) -> float:
         """
         Compute the Signal-to-Noise Ratio (SNR) between raw and processed audio.
 
-        Args:
-            raw_audio_path (str): Path to the raw audio file.
-            processed_audio_path (str): Path to the processed audio file.
+        Parameters:
+        - raw_audio_path (Path): Path to the raw audio file.
+        - processed_audio_path (Path): Path to the processed audio file.
 
         Returns:
-            float: Calculated SNR value.    
+        - float: Calculated SNR value.
+
+        Raises:
+        - ValueError: If the raw_audio_path or processed_audio_path is not a valid file path.
+
+        Notes:
+        - This method calculates the SNR between the raw and processed audio files.
+        - The raw_audio_path and processed_audio_path should be valid file paths.
+        - The SNR value is calculated using the formula: SNR = 10 * log10(signal_power / noise_power).
+        - If the signal_power or noise_power is zero, the SNR value will be NaN.
         """
+        try:
+            # Load the raw and processed audio files
+            rate_raw, raw_audio = wavfile.read(raw_audio_path)
+            rate_processed, processed_audio = wavfile.read(processed_audio_path)
 
-        # Load the raw and processed audio files
-        rate_raw, raw_audio = wavfile.read(raw_audio_path)
-        rate_processed, processed_audio = wavfile.read(processed_audio_path)
+            # Ensure that both audio files have the same length
+            min_length = min(len(raw_audio), len(processed_audio))
+            raw_audio = raw_audio[:min_length]
+            processed_audio = processed_audio[:min_length]
 
-        # Ensure that both audio files have the same length
-        min_length = min(len(raw_audio), len(processed_audio))
-        raw_audio = raw_audio[:min_length]
-        processed_audio = processed_audio[:min_length]
+            # Function to calculate the power of a signal
+            def calculate_power(signal):
+                return np.sum(signal ** 2) / len(signal)
 
-        # Function to calculate the power of a signal
-        def calculate_power(signal):
-            return np.sum(signal ** 2) / len(signal)
+            # Function to calculate SNR
+            def calculate_snr(clean_signal, noisy_signal):
+                noise = noisy_signal - clean_signal
+                signal_power = calculate_power(clean_signal)
+                noise_power = calculate_power(noise)
 
-        # Function to calculate SNR
-        def calculate_snr(clean_signal, noisy_signal):
-            noise = noisy_signal - clean_signal
-            signal_power = calculate_power(clean_signal)
-            noise_power = calculate_power(noise)
+                # Handle division by zero by returning NaN
+                if noise_power == 0 or signal_power == 0:
+                    logger.warning("Calculated SNR: Returning NaN due to zero power.")
+                    return float('nan')
 
-            # Handle division by zero by returning NaN
-            if noise_power == 0 or signal_power == 0:
-                logger.warning("Calculated SNR: Returning NaN due to zero power.")
-                return float('nan')
+                snr = 10 * np.log10(signal_power / noise_power)
 
-            snr = 10 * np.log10(signal_power / noise_power)
+                return snr
 
-            return snr
+            # Calculate SNR
+            snr_value = calculate_snr(processed_audio, raw_audio)
 
-        # Calculate SNR
-        snr_value = calculate_snr(processed_audio, raw_audio)
-        
-        logger.debug(f"Calculated SNR: {snr_value:.2f}")
+            logger.debug(f"Calculated SNR: {snr_value:.2f}")
 
-        return snr_value
-    
+            return snr_value
+
+        except Exception as e:
+            logger.error(f"Error computing SNR: {e}")
+            raise ValueError("Invalid file path for raw_audio_path or processed_audio_path.")

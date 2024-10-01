@@ -1,6 +1,5 @@
 # Standard Libraries
 import asyncio
-import psycopg2
 import argparse
 from typing import List
 from dataclasses import dataclass
@@ -19,6 +18,18 @@ class ExperimentConfig:
 
 class ExtendedDatabaseOperations(DatabaseOperations):
     def get_exp_experiment_prompt_terms(self, experiment_id: int) -> List[str]:
+        """
+        Retrieves the prompt terms for a given experiment ID from the database.
+
+        Args:
+            experiment_id (int): The ID of the experiment.
+
+        Returns:
+            List[str]: A list of prompt terms.
+
+        Raises:
+            Exception: If there is an error executing the query.
+        """
         select_query = """
             SELECT term
             FROM exp_experiment_prompt_terms
@@ -32,12 +43,21 @@ class ExtendedDatabaseOperations(DatabaseOperations):
         records = self.execute_query("TestWorker", select_query, params)
 
         # Extract 'term' from each record
-        video_files = [record[0] for record in records]
+        prompt_terms = [record[0] for record in records]
             
-        print(f"Retrieved {len(video_files)} video files.")
-        return video_files            
+        print(f"Retrieved {len(prompt_terms)} prompt terms.")
+        return prompt_terms
 
 async def main(config: ExperimentConfig) -> None:
+    """
+    Main function for updating prompt terms.
+    
+    Args:
+        config (ExperimentConfig): The experiment configuration.
+    
+    Returns:
+        None
+    """
     # Initialize the Whisper model
     model = WhisperModel('/media/bigdaddy/data/cache_model/faster-distil-whisper-medium.en')  # Replace 'model_name' with your actual model name
 

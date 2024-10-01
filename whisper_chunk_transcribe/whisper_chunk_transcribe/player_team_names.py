@@ -60,6 +60,18 @@ class GameFetcher:
             return None
         
     async def extract_players(self, player_data_dict, home_index: int, position_index: int, team_id: int) -> List[Player]:
+        """
+        Extracts player information from the given player_data_dict based on the home_index, position_index, and team_id.
+
+        Args:
+            player_data_dict (dict): A dictionary containing player data.
+            home_index (int): The index of the home team in the player_data_dict.
+            position_index (int): The index of the position in the player_data_dict.
+            team_id (int): The ID of the team.
+
+        Returns:
+            List[Player]: A list of Player objects containing the extracted player information.
+        """
         players = []
         for athlete in player_data_dict[home_index]['statistics'][position_index]['athletes']:
             players.append(
@@ -82,8 +94,8 @@ class GameFetcher:
             espn_id (int): The ESPN ID of the game.
 
         Returns:
-            Game or None: A Game object containing the extracted information 
-                          or None if any of the required fields are missing.
+            Optional[Game]: A Game object containing the extracted information 
+                            or None if any of the required fields are missing.
         """
         try:
             # Fetch data from the ESPN API using the espn_id
@@ -142,19 +154,22 @@ class GameFetcher:
             return None
 
 async def main():
+    """
+    Main function to process game data and upsert it into the database.
+
+    Returns:
+        None
+    """
     # Initialize the DatabaseOperations class
     db_ops = DatabaseOperations()
 
     # Fetch video IDs and ESPN IDs from the database
     ids = db_ops.get_exp_video_espn_map("GameFetcher")
-    # logger.debug(f"Video and ESPN IDs fetched: {ids}")
 
     for video_id, espn_id in ids:
         try:
             game_fetcher = GameFetcher()
             game_instance = await game_fetcher.process_game(video_id, espn_id)
-            # logger.debug(f"[{worker_name}] Home players: {len(game_instance.home_players)}")
-            # logger.debug(f"[{worker_name}] Away players: {len(game_instance.away_players)}")
             
             if game_instance:
                 # Upsert the game data into the database

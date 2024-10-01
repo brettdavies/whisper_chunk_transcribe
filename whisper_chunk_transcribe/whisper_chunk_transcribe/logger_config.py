@@ -17,7 +17,7 @@ class LoggerConfig:
             log_name (str): The name of the log file. Typically the name of the script.
             log_file_dir (str, optional): The directory where the log file will be stored. Defaults to "./data/log/".
             log_level (str, optional): The logging level. Defaults to "INFO".
-            log_file_prefix (str, optional): The prefix for the log file name. Defaults to "video_".
+            log_file_prefix (str, optional): The prefix for the log file name. Defaults to "".
         """
         log_file_name = f"{log_file_prefix}{log_name}.log"
         log_file_path = Path(log_file_dir) / log_file_name

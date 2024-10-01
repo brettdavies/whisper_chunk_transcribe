@@ -57,6 +57,7 @@ class ExperimentRunner:
 
         Args:
             worker_id (int): Identifier for the worker.
+            executor (ThreadPoolExecutor): Executor for offloading tasks to a separate thread.
 
         Returns:
             None
@@ -96,6 +97,12 @@ class ExperimentRunner:
             logger.error(f"[{worker_name}] Error in worker: {e}")
 
     async def retrieve_exp_experiment_test_cases(self) -> None:
+        """
+        Retrieve experiment test cases from the database asynchronously.
+
+        Returns:
+            None
+        """
         self.test_cases = await asyncio.to_thread(
             self.db_ops.get_exp_experiment_test_cases,
             "ExperimentRunner",
@@ -109,7 +116,7 @@ class ExperimentRunner:
         Retrieve video local paths from the database asynchronously and add them to the segment queue.
 
         Args:
-            ref_prev_transcription (bool): Flag to determine if the segments reference previous transcriptions.
+            use_prev_transcription (bool): Flag to determine if the segments reference previous transcriptions.
 
         Returns:
             None
@@ -135,17 +142,17 @@ class ExperimentRunner:
         logger.info(f"Size of queue after put: {self.queue_manager.segment_queue.qsize()}")
 
     async def fetch(
-            self,
-            model_for_transcribe: Path = None,
-            experiment_id: int = None,
-            num_workers: int = 1
-        ) -> None:
+        self,
+        model_for_transcribe: Path = None,
+        experiment_id: int = None,
+        num_workers: int = 1
+    ) -> None:
         """
         Fetch and process audio segments using multiple workers.
 
         Args:
             model_for_transcribe (Path): Directory containing the model to use for transcription.
-            num_models (int): Number of models to load.
+            experiment_id (int): Identifier for the experiment.
             num_workers (int): Number of concurrent worker tasks.
 
         Returns:

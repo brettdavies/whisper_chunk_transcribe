@@ -7,6 +7,16 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ExpSegment:
+    """
+    Represents a segment of an experiment.
+
+    Attributes:
+        segment_id (int): The ID of the segment.
+        video_id (str): The ID of the video associated with the segment.
+        raw_audio_path (Path): The path to the raw audio file of the segment.
+        processed_audio_path (Path): The path to the processed audio file of the segment.
+        test_case_id (int): The ID of the test case associated with the segment.
+    """
     segment_id: int
     video_id: str
     raw_audio_path: Path
@@ -15,6 +25,18 @@ class ExpSegment:
 
 @dataclass
 class ExpTestCase:
+    """
+    Represents a test case for an experiment.
+
+    Attributes:
+        experiment_id (int): The ID of the experiment.
+        test_case_id (int): The ID of the test case.
+        prompt_template (str): The template for the prompt.
+        prompt_tokens (int): The number of tokens in the prompt.
+        test_prompt_id (int, optional): The ID of the test prompt in the database. Defaults to None.
+        _is_dynamic (bool): Internal field to indicate if the prompt template is dynamic. Defaults to False.
+        _use_prev_transcription (bool): Internal field to indicate if the prompt template uses previous transcription. Defaults to False.
+    """
     experiment_id: int
     test_case_id: int
     prompt_template: str
@@ -25,7 +47,10 @@ class ExpTestCase:
 
     def __post_init__(self):
         """
-        Post-initialization processing to set 'is_dynamic' and 'previous_transcription' based on 'prompt_template'.
+        Post-initialization processing to set 'is_dynamic' and 'use_prev_transcription' based on 'prompt_template'.
+
+        Raises:
+            ValueError: If 'prompt_template' is not a string.
         """
         if self.prompt_template:
             if not isinstance(self.prompt_template, str):
@@ -65,6 +90,15 @@ class ExpTestCase:
 
 @dataclass
 class TranscriptionWord:
+    """
+    Represents a word in a transcription.
+
+    Attributes:
+        start (float): The start time of the word.
+        end (float): The end time of the word.
+        word (str): The word itself.
+        probability (float): The probability of the word being correct.
+    """
     start: float
     end: float
     word: str
@@ -72,6 +106,15 @@ class TranscriptionWord:
 
 @dataclass
 class TranscriptionSegment:
+    """
+    Represents a segment of a transcription.
+
+    Attributes:
+        transcribed_text (str): The transcribed text of the segment.
+        start (float): The start time of the segment.
+        end (float): The end time of the segment.
+        avg_logprob (float): The average log probability of the segment.
+    """
     transcribed_text: str
     start: float
     end: float
@@ -79,44 +122,92 @@ class TranscriptionSegment:
 
 @dataclass
 class Transcription:
-    segments: List[TranscriptionSegment]  # List of TranscriptionSegment instances
-    words: List[TranscriptionWord]        # List of TranscriptionWord instances
+    """
+    Represents a transcription.
+
+    Attributes:
+        segments (List[TranscriptionSegment]): A list of TranscriptionSegment instances.
+        words (List[TranscriptionWord]): A list of TranscriptionWord instances.
+    """
+    segments: List[TranscriptionSegment]
+    words: List[TranscriptionWord]
 
 def compute_average_logprob(segments: List[TranscriptionSegment]) -> float:
     """
-	Converting to Probabilities and Back:
-	•	More accurate for scenarios where you need to represent the average behavior of probabilities.
-	•	This method is essential when you need to make probabilistic interpretations based on the average value.
-    """
+    Compute the average log probability of a list of TranscriptionSegments.
 
-    # Step 1: Convert avg_logprob to probabilities
+    Args:
+        segments (List[TranscriptionSegment]): A list of TranscriptionSegment instances.
+
+    Returns:
+        float: The average log probability.
+
+    Raises:
+        TypeError: If segments is not a list.
+        ValueError: If segments is an empty list.
+
+    Notes:
+        This method converts the average log probability to probabilities, calculates the average of the probabilities,
+        and then converts the average probability back to log probability.
+    """
+    if not isinstance(segments, list):
+        raise TypeError("segments must be a list")
+
+    if len(segments) == 0:
+        raise ValueError("segments cannot be an empty list")
+
+    # Convert avg_logprob to probabilities
     probabilities = [math.exp(segment.avg_logprob) for segment in segments]
 
-    if len(probabilities) == 0:
-        return None
-
-    # Step 2: Calculate the average of probabilities
+    # Calculate the average of probabilities
     avg_probability = sum(probabilities) / len(probabilities)
-    
-    # Step 3: Convert the average probability back to log probability
+
+    # Convert the average probability back to log probability
     avg_logprob = math.log(avg_probability)
-    
+
     return avg_logprob
 
 @dataclass
 class Team:
+    """
+    Represents a team.
+
+    Attributes:
+        team_id (int): The ID of the team.
+        display_name (str): The display name of the team.
+        abbreviation (str): The abbreviation of the team.
+    """
     team_id: int
     display_name: str
     abbreviation: str
 
 @dataclass
 class Player:
+    """
+    Represents a player.
+
+    Attributes:
+        player_id (int): The ID of the player.
+        name (str): The name of the player.
+        team_id (int, optional): The ID of the team the player belongs to. Defaults to None and can be set during upsert if needed.
+    """
     player_id: int
     name: str
-    team_id: int = None  # Can be set during upsert if needed
+    team_id: int = None
 
 @dataclass
-class Game:  # Class representing a game
+class Game:
+    """
+    Represents a game.
+
+    Attributes:
+        video_id (str): The ID of the video associated with the game.
+        espn_id (int): The ID of the game in ESPN.
+        home_team (Team): The home team of the game.
+        away_team (Team): The away team of the game.
+        home_players (List[Player], optional): The list of home players. Defaults to an empty list.
+        away_players (List[Player], optional): The list of away players. Defaults to an empty list.
+    """
     video_id: str
     espn_id: int
     home_team: Team
@@ -124,13 +215,34 @@ class Game:  # Class representing a game
     home_players: List[Player] = field(default_factory=list)
     away_players: List[Player] = field(default_factory=list)
 
-    def get_upsert_teams(self):
+    def get_upsert_teams(self) -> List[Team]:
+        """
+        Returns a list of teams involved in the game.
+
+        Returns:
+            List[Team]: A list containing the home team and the away team.
+        """
         return [self.home_team, self.away_team]
 
-    def get_upsert_players(self):
+    def get_upsert_players(self) -> List[Player]:
+        """
+        Returns a list of players that need to be upserted into the database.
+
+        This method combines the home_players and away_players lists and returns the result.
+
+        Returns:
+            List[Player]: A list of players that need to be upserted into the database.
+        """
         return self.home_players + self.away_players
 
 @dataclass
 class PromptData:
+    """
+    Represents prompt data.
+
+    Attributes:
+        prompt (str): The prompt.
+        tokens (int): The number of tokens in the prompt.
+    """
     prompt: str
     tokens: int

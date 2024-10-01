@@ -7,8 +7,13 @@
 --      assigns test cases to the treatment group
 --      calculates prompt scores based on weights and inserts them into the database (separate statement)
 
+WITH date_range AS (
+    SELECT
+        '2014-01-01 00:00:00'::timestamp AS start_date,
+        '2018-12-31 23:59:59'::timestamp AS end_date
+),
 -- Create experiment record and get the experiment_id
-WITH inserted_experiment AS (
+inserted_experiment AS (
     INSERT INTO exp_experiments (experiment_name, description)
     VALUES (
         'Prompt Impact Experiment',
@@ -20,7 +25,7 @@ total_rows AS (
     SELECT COUNT(*) AS cnt
     FROM yt_metadata AS m
     JOIN yt_video_file AS file ON m.video_id = file.video_id
-    WHERE m.event_date_local_time BETWEEN '2014-01-01 00:00:00' AND '2018-12-31 23:59:59'
+    WHERE m.event_date_local_time BETWEEN (SELECT start_date FROM date_range) AND (SELECT end_date FROM date_range)
 ),
 -- Insert random 1% of videos associated with the experiment
 inserted_videos AS (
@@ -30,9 +35,9 @@ inserted_videos AS (
         m.video_id
     FROM yt_metadata AS m
     JOIN yt_video_file AS file ON m.video_id = file.video_id
-    WHERE m.event_date_local_time BETWEEN '2014-01-01 00:00:00' AND '2018-12-31 23:59:59'
+    WHERE m.event_date_local_time BETWEEN (SELECT start_date FROM date_range) AND (SELECT end_date FROM date_range)
     ORDER BY RANDOM()
-    LIMIT (SELECT CEIL(cnt * 0.01) FROM total_rows)
+    LIMIT (SELECT CEIL(cnt * 0.01) FROM total_rows) -- 1% of the total videos
     RETURNING video_id
 ),
 -- Insert into exp_experiment_segments linking the experiment and audio segments
@@ -48,10 +53,10 @@ inserted_segments AS (
 -- Weights to use for the prompt scoring calculation
 prompt_category_weights AS (
     SELECT 
-        1.0 AS in_game_usage,       -- Replace 1.0 with the actual weight
-        1.0 AS general_speech,      -- Replace 1.0 with the actual weight
-        1.0 AS impact_transcription, -- Replace 1.0 with the actual weight
-        1.0 AS confusion_potential    -- Replace 1.0 with the actual weight
+        1.0 AS in_game_usage,       -- Replace 1.0 with the desired weight
+        1.0 AS general_speech,      -- Replace 1.0 with the desired weight
+        1.0 AS impact_transcription, -- Replace 1.0 with the desired weight
+        1.0 AS confusion_potential    -- Replace 1.0 with the desired weight
 ),
 -- Calculate the final scores based on base scores and weights
 scoring AS (
@@ -104,7 +109,7 @@ exp_prompt_terms AS (
         final_score, 
         tokens
     FROM scoring
-)
+);
 
 
 
@@ -132,24 +137,24 @@ inserted_test_cases AS (
             'Transcribe the audio without any additional prompt.',
             NULL,
             0,
-            FALSE,
-            FALSE
+            FALSE,  -- is_dynamic
+            FALSE -- use_prev_transcription
         ),(
             (SELECT experiment_id FROM inserted_experiment),
             'Unrelated Prompt',
             'Use an unrelated prompt to assess its impact on transcription accuracy.', 
             'A comprehensive guide to planting and maintaining a thriving home garden, tailored for both beginners and experienced gardeners. This audio will focus on essential gardening terms and practices that contribute to a successful and sustainable garden. Key terms include: soil preparation, the importance of testing soil pH, selecting quality seeds based on climate and season, understanding proper watering techniques to avoid overwatering or underwatering, ensuring adequate sunlight for different types of plants, effective pruning methods to encourage healthy growth, understanding various types of fertilizers and their application, the benefits of composting for soil enrichment, promoting healthy plant growth through nutrient management, harvesting crops at the right time for maximum flavor and yield, implementing integrated pest control strategies to protect plants from damage, monitoring plant health for early detection of diseases, the importance of mulch for moisture retention and weed control, principles of organic gardening that focus on sustainability, and cultivating a diverse array of plants such as vegetables, fruits, herbs, and flowers to create a vibrant and productive garden ecosystem. Mastering these concepts will not only enhance your gardening skills but also contribute to a more sustainable environment. Whether you are growing food for your family or beautifying your outdoor space, these practices will lead you toward gardening success.',
             247, -- python -m whisper_chunk_transcribe.run_determine_token_length "{prompt_template}"
-            FALSE,
-            FALSE
+            FALSE,  -- is_dynamic
+            FALSE -- use_prev_transcription
         ),(
             (SELECT experiment_id FROM inserted_experiment),
             'Generic Sports Prompt',
             'Provide a general sports-related prompt without specific sports terminology.',
             'An overview of the fundamental concepts and strategies involved in various sports, emphasizing the importance of teamwork, discipline, and physical fitness. This guide will cover essential themes such as the significance of practice and preparation, understanding rules and regulations, developing skills and techniques, and the role of coaching and mentorship in athlete development. Key components include maintaining physical conditioning, fostering a positive mindset, enhancing communication among team members, and setting personal and collective goals. Additionally, the prompt will highlight the value of sportsmanship, respect for opponents, and the ability to handle both victories and defeats gracefully. Engaging in sports promotes not only physical health but also mental resilience and social interaction. It encourages individuals to push their limits, develop a sense of commitment, and build lasting relationships through shared experiences. Whether participating in recreational activities or competitive events, embracing these principles contributes to a fulfilling sports experience. By understanding the broader implications of sports in our lives, individuals can cultivate a lifelong appreciation for physical activity, personal growth, and the joy of movement, while also recognizing the impact of sports on community building and cultural exchange. This holistic approach will inspire athletes of all levels to strive for excellence and personal growth.',
             252, -- python -m whisper_chunk_transcribe.run_determine_token_length "{prompt_template}"
-            FALSE,
-            FALSE
+            FALSE,  -- is_dynamic
+            FALSE -- use_prev_transcription
         ),(
             (SELECT experiment_id FROM inserted_experiment),
             'Baseball Terms',
@@ -157,36 +162,36 @@ inserted_test_cases AS (
             -- Include the result from terms_prompt CTE
             'terms: pitcher, home run, inning, catcher, innings, fly ball, bases loaded, strikeout, batter, fastball, RBI, foul ball, second baseman, first baseman, shortstop, third baseman, left fielder, line drive, right fielder, center fielder, pitch count, double play, dugout, outfield, infield, at bat, grounder, pop fly, bullpen, umpire, changeup, pitch, relief pitcher, curveball, strike, bunt, sacrifice fly, designated hitter, slider, on deck, intentional walk, ERA, walk-off, foul tip, tag out, full count, no-hitter, pinch hitter, OBP, slugging percentage, pick-off, force out, sinker, pinch runner, perfect game, grand slam, fly out, balk, go-ahead run, mound visit, earned run, knuckleball, fielder''s choice, warning track, 1-2, 2-1, 2-2, 2-0, 3-1, 3-0, 3-2, 0-1, 0-2, 1-0, 1-1, run-down, shutout, caught looking, long ball, inside pitch, complete game'
             252, -- get this value and the terms above by running `python -m whisper_chunk_transcribe.update_prompt_terms` AFTER running the script above
-            FALSE,
-            FALSE
+            FALSE,  -- is_dynamic
+            FALSE -- use_prev_transcription
         ),(
             (SELECT experiment_id FROM inserted_experiment),
             'Baseball Prompt with Game-Specific Details',
             'Use a prompt that includes baseball terms and specific details about the game.',
             'The game between {team_a} and {team_b} is underway at {stadium_name}. Star players like {player_a} and {player_b} are expected to make significant impacts. Key terms: {prompt_terms}',
             NULL,
-            TRUE,
-            FALSE
+            TRUE,  -- is_dynamic
+            FALSE -- use_prev_transcription
         ),(
             (SELECT experiment_id FROM inserted_experiment),
             'Previous Segment Transcription',
             'Use the transcription of the previous audio segment as the prompt.',
             '{previous_transcription}',
             NULL,
-            TRUE,
-            TRUE
+            TRUE,  -- is_dynamic
+            TRUE -- use_prev_transcription
         ),(
             (SELECT experiment_id FROM inserted_experiment),
             'Combined Prompt with Previous Transcription and Game Details',
             'Combine the previous segment''s transcription with baseball-specific terms and game-specific details.',
             '{previous_transcription} Continuing the matchup between {team_a} and {team_b} at {stadium_name}. Notable players like {player_a} are showing impressive performances. Key terms: {prompt_terms}',
             NULL,
-            TRUE,
-            TRUE
+            TRUE,  -- is_dynamic
+            TRUE -- use_prev_transcription
         )
 ),
 -- Prepopulate the non-dynamic prompts for the experiment
-WITH inserted_prompt_terms AS (
+inserted_prompt_terms AS (
     INSERT INTO exp_test_prompts (
         experiment_test_case_id,
         prompt,

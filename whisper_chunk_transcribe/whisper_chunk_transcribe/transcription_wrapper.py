@@ -10,7 +10,7 @@ from faster_whisper import WhisperModel
 import torch
 
 # First Party Libraries
-from .helper_classes import ExpSegment, ExpTestCase, PromptData, compute_average_logprob
+from .helper_classes import ExpSegment, ExpTestCase, compute_average_logprob
 from .database import DatabaseOperations
 from .transcription_processor import TranscriptionProcessor
 
@@ -20,10 +20,9 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
 
     Args:
         worker_name (str): Identifier for the worker.
-        device (str): Device to run the model on.
         model_for_transcribe (Path): Path to the model for transcription.
         segment (ExpSegment): Instance of the ExpSegment class.
-        prompt_template (str): Template for the prompt.
+        test_case (ExpTestCase): Instance of the ExpTestCase class.
 
     Returns:
         None
@@ -34,7 +33,7 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
         Load an instance of the model into the device.
 
         Args:
-            device (str): Device on which to to load the model.
+            device (str): Device on which to load the model.
             model_for_transcribe (Path): Path to the model for transcription.
 
         Returns:
@@ -60,6 +59,7 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
             test_case (ExpTestCase): Instance of the ExpTestCase class.
             segment (ExpSegment): Instance of the ExpSegment class.
             transcription_processor (TranscriptionProcessor): Instance of the TranscriptionProcessor class.
+            is_raw_audio (bool): Flag indicating if the audio is raw or processed.
 
         Returns:
             None
@@ -69,9 +69,9 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
         average_segment_avg_logprob = compute_average_logprob(transcription_processor.transcription.segments)
 
         # Calculate average word probability
-        if len(transcription_processor.transcription.words) == 0:
-            average_word_probability = None
-        average_word_probability = sum([word.probability for word in transcription_processor.transcription.words]) / len(transcription_processor.transcription.words)
+        average_word_probability = None
+        if len(transcription_processor.transcription.words) > 0:
+            average_word_probability = sum([word.probability for word in transcription_processor.transcription.words]) / len(transcription_processor.transcription.words)
 
         # Insert experiment test
         test_id = db_ops.insert_exp_test(
@@ -140,7 +140,7 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
             ##################
             # Call the transcription method for the raw audio file
             logger.debug(f"[{worker_name}] Performing transcription for raw: \"{segment.raw_audio_path}\"")
-            await transcription_processor.transcribe_audio(segment.segment_id, segment.raw_audio_path)
+            await transcription_processor.transcribe_audio(segment.raw_audio_path)
 
             # Set the test results for the raw audio file
             await set_test_results(worker_name, db_ops, test_case, segment, transcription_processor, is_raw_audio=True)
@@ -160,7 +160,7 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
                 await transcription_processor.set_initial_prompt(processed_test_prompt_id, processed_data.prompt, processed_data.tokens)
 
             logger.debug(f"[{worker_name}] Performing transcription for processed:\"{segment.processed_audio_path}\"")
-            await transcription_processor.transcribe_audio(segment.segment_id, segment.processed_audio_path)
+            await transcription_processor.transcribe_audio(segment.processed_audio_path)
 
             # Set the test results for the processed audio file
             await set_test_results(worker_name, db_ops, test_case, segment, transcription_processor, is_raw_audio=False)
@@ -169,9 +169,6 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
             logger.error(f"[{worker_name}] Error in test_segment: {e}")
         finally:
             del model
-
-            # # Clear the cache to reduce CUDA OOM (out of memory) errors
-            # torch.cuda.empty_cache()
         
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
