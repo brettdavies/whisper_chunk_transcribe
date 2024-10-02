@@ -146,4 +146,4 @@ if __name__ == "__main__":
     asyncio.run(main(config))
 
 # Run the script as a Module:
-# python -m whisper_chunk_transcribe.update_prompt_terms
+# python -m whisper_chunk_transcribe.helper_update_prompt_terms

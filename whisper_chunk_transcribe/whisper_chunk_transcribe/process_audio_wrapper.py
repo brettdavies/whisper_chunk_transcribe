@@ -15,9 +15,9 @@ def process_audio_sync(worker_name: str, source_file_path: Path, model_for_vad: 
     
     Args:
         worker_name (str): Identifier for the worker.
-        source_file_path (Path): Path to the source audio file.
-        model_for_vad (Path): Path to the VAD model file.
-        output_dir (Path): Directory to store output files.
+        source_file_path (Path): Path to the source audio file to be processed.
+        model_for_vad (Path): Path to the Voice Activity Detection (VAD) model used for segmenting the audio.
+        output_dir (Path): Directory where processed audio files and segments will be saved.
     
     Returns:
         None

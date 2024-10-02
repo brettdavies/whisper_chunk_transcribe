@@ -10,7 +10,7 @@ class DatabaseOperations:
 
 async def main(prompt_to_tokenize):
     # Initialize the Whisper model
-    model = WhisperModel('/cache_model/faster-distil-whisper-medium.en')  # Replace a different model name as required
+    model = WhisperModel('/media/bigdaddy/data/cache_model/faster-distil-whisper-medium.en')  # Replace a different model name as required
 
     # Initialize the database operations stub class
     db_ops = DatabaseOperations()
@@ -34,5 +34,4 @@ if __name__ == "__main__":
     asyncio.run(main(args.prompt))
 
 # Run the script as a Module:
-# python -m whisper_chunk_transcribe.determine_prompt_length_tokens "How many tokens is this prompt?"
-
+# python -m whisper_chunk_transcribe.helper_determine_prompt_length_tokens "How many tokens is this prompt?"

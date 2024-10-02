@@ -2,7 +2,6 @@
 import os
 import json
 import asyncio
-from signal import pause
 import requests
 from typing import List, Optional
 
@@ -188,4 +187,4 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 # Run the script as a Module:
-# python -m whisper_chunk_transcribe.player_team_names
+# python -m whisper_chunk_transcribe.helper_player_team_names

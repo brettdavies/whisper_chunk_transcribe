@@ -181,7 +181,7 @@ class TranscriptionProcessor:
 
     async def prepare_initial_prompt(self, test_case: ExpTestCase, segment: ExpSegment) -> List[PromptData]:
         """
-        Prepare the initial prompt for the transcription process.
+        Prepares the initial prompt for the transcription process. It handles dynamic prompts by incorporating previous transcriptions and relevant metadata from the database (e.g., teams or players).
 
         Args:
             test_case (ExpTestCase): The test case object.
@@ -249,6 +249,8 @@ class TranscriptionProcessor:
     async def transcribe_audio(self, audio_path: Path) -> None:
         """
         Transcribes the audio file for a given segment.
+        It can either use a prompt or transcribe without one, depending on the test case settings.
+        The method captures the transcribed segments and words, including their timestamps and confidence scores.
 
         Args:
             segment_id (int): The ID of the segment.

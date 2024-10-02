@@ -16,7 +16,9 @@ from .transcription_processor import TranscriptionProcessor
 
 def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegment, test_case: ExpTestCase) -> None:
     """
-    Synchronous wrapper to run the asynchronous tests.
+    This function synchronizes the entire transcription workflow,
+    from loading the model and transcribing audio segments to storing the results in the database.
+    It handles both raw and processed audio files, managing the transcription for each file separately.
 
     Args:
         worker_name (str): Identifier for the worker.
@@ -33,7 +35,7 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
         Load an instance of the model into the device.
 
         Args:
-            device (str): Device on which to load the model.
+            device (str): Device on which the model is to be loaded (`cpu` or `cuda`).
             model_for_transcribe (Path): Path to the model for transcription.
 
         Returns:
@@ -55,10 +57,10 @@ def test_segment(worker_name: str, model_for_transcribe: Path, segment: ExpSegme
 
         Args:
             worker_name (str): Identifier for the worker.
-            db_ops (DatabaseOperations): Instance of the DatabaseOperations class.
-            test_case (ExpTestCase): Instance of the ExpTestCase class.
-            segment (ExpSegment): Instance of the ExpSegment class.
-            transcription_processor (TranscriptionProcessor): Instance of the TranscriptionProcessor class.
+            db_ops (DatabaseOperations): Database operations instance for storing results.
+            test_case (ExpTestCase): The current test case configuration.
+            segment (ExpSegment): The audio segment being transcribed.
+            transcription_processor (TranscriptionProcessor): The processor handling transcription tasks.
             is_raw_audio (bool): Flag indicating if the audio is raw or processed.
 
         Returns:

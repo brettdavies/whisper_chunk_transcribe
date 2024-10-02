@@ -15,7 +15,17 @@ from .database import DatabaseOperations
 class Utils:
     @staticmethod
     async def validate_and_create_dir(dir_path: Path, env_var_name: str, create: bool) -> Path:
-        """Validate directory, attempt to fetch from environment variable if not provided. Create if bool is True."""
+        """
+        Validate directory, attempt to fetch from environment variable if not provided. Create if bool is True.
+        
+        Args:
+            dir_path (Path): The directory path to validate or create.
+            env_var_name (str): The name of the environment variable to check for the directory path if the input path is invalid.
+            create (bool): Whether to create the directory if it doesn't exist.
+
+        Returns:
+            Path: The validated directory path or `False` if validation fails or the directory cannot be created.
+        """
         if not dir_path or not dir_path.is_dir():
             dir_path = Path(os.getenv(env_var_name))
             if not dir_path:
@@ -32,13 +42,14 @@ class Utils:
     @staticmethod
     async def read_prompt_terms_from_file(prompt_terms_file: str, worker_name: str) -> pd.DataFrame:
         """
-        Reads prompt terms from a CSV file into a pandas DataFrame.
+        Reads prompt terms from a CSV file into a Pandas DataFrame.
 
         Parameters:
-        - prompt_terms_file (str): The file path of the CSV containing prompt terms.
+            prompt_terms_file (str): The path of the CSV containing prompt terms.
+            worker_name (str): Identifier for the worker.
 
         Returns:
-        - pd.DataFrame: DataFrame containing the prompt terms.
+            pd.DataFrame: DataFrame containing the prompt terms.
         """
         try:
             df = pd.read_csv(prompt_terms_file)
@@ -51,10 +62,10 @@ class Utils:
     @staticmethod
     async def read_prompt_terms_from_cli_argument_insert_db(prompt_terms_file: str) -> None:
         """
-        Reads prompt terms from command-line arguments and inserts them into the database.
+        This function reads a file path for prompt terms from command-line arguments, loads the terms into a Pandas DataFrame, and inserts the data into the database.
 
         Args:
-            prompt_terms_file (str): A file path containing prompt terms.
+            prompt_terms_file (str): The file path containing prompt terms (usually a CSV).
 
         Returns:
             None

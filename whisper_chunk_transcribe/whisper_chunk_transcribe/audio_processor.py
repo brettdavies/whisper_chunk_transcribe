@@ -22,6 +22,45 @@ from .utils import Utils
 from .database import DatabaseOperations
 
 class AudioProcessor:
+    """
+    The AudioProcessor class is responsible for processing audio files.
+    It provides methods to:
+    - Transform audio files to WAV format.
+    - Apply Wiener filtering and Non-stationary Noise Reduction.
+    - Segment audio files based on Voice Activity Detection (VAD).
+
+    Attributes:
+    - model_for_vad (Path): The path to the VAD model.
+    - source_file_path (Path): The path to the source audio file.
+    - output_dir (Path): The path to the output directory.
+    - worker_name (str): The name of the worker.
+    - db_ops (DatabaseOperations): An instance of the DatabaseOperations class.
+    - video_id (str): The video ID extracted from the source audio file.
+    - output_file_extension (str): The output file extension.
+    - output_file_name (str): The output file name.
+    - output_file_dir (Path): The output file directory.
+    - output_original_file_dir (Path): The output directory for original audio files.
+    - output_processed_file_dir (Path): The output directory for processed audio files.
+    - original_segment_file_path (Path): The directory for original audio segments.
+    - processed_segment_file_path (Path): The directory for processed audio segments.
+    - output_file_original_path_name (Path): The output file path for the original audio file.
+    - output_file_processed_path_name (Path): The output file path for the processed audio file.
+    - device (str): The device for running the VAD pipeline (GPU or CPU).
+    - segment_df (pd.DataFrame): The DataFrame to store segment information.
+    - vad (Annotation): The Voice Activity Detection (VAD) results.
+
+    Methods:
+    - transform_source2wav: Transform the source audio file to WAV format.
+    - load_vad_pipeline: Load the Voice Activity Detection (VAD) pipeline.
+    - extract_segments_from_audio_file: Extract segments from the audio file using VAD.
+    - segment_audio_based_on_vad: Segment the audio file based on VAD results.
+    - load_and_resample_audio: Load and resample the audio file.
+    - apply_wiener_filter: Apply a Wiener filter to the waveform.
+    - apply_non_stationary_noise_reduction: Apply non-stationary noise reduction to the waveform.
+    - save_waveform_to_wav: Save the waveform as a WAV file.
+    - calculate_snr: Calculate the Signal-to-Noise Ratio (SNR) for audio segments.
+    - compute_snr: Compute the Signal-to-Noise Ratio (SNR) between raw and processed audio.
+    """
     def __init__(self, model_for_vad: Path, source_file_path: Path, output_dir: Path, worker_name: str, db_ops: DatabaseOperations) -> None:
         """
         Initializes an instance of the AudioProcessor class.
@@ -110,10 +149,10 @@ class AudioProcessor:
     async def transform_source2wav(self) -> None:
         """
         Complete audio processing pipeline:
-        1. Load and resample audio to 16 kHz.
-        2. Apply Wiener filtering.
-        3. Apply Non-stationary Noise Reduction.
-        4. Save the processed audio as a 16 kHz WAV file.
+        1. Resamples the audio to 16 kHz.
+        2. Applies a Wiener filter to reduce noise.
+        3. Uses non-stationary noise reduction to further clean the audio.
+        4. Saves both the original and processed audio as WAV files.
         """
         try:
             if self.output_file_original_path_name.exists() and self.output_file_processed_path_name.exists():
@@ -143,7 +182,7 @@ class AudioProcessor:
 
     async def load_vad_pipeline(self) -> VoiceActivityDetection:
         """
-        Load the Voice Activity Detection (VAD) pipeline.
+        Load the Voice Activity Detection (VAD) pipeline using the specified model.
         
         Raises:
         - Exception: If there is an error loading the VAD pipeline.
@@ -181,7 +220,7 @@ class AudioProcessor:
 
     async def extract_segments_from_audio_file(self) -> None:
         """
-        Process the given WAV file and segment it using voice activity detection (VAD).
+        Extracts segments from the audio file using VAD, storing the results in a text file.
 
         Returns:
         None
