@@ -15,11 +15,11 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION manage_video_espn_mapping()
 RETURNS TRIGGER AS $$
 DECLARE
-    espn_id INTEGER;
+    espn_id INT;
     existing_record RECORD;
 BEGIN
     -- Extract espn_id from the local_path
-    SELECT (REGEXP_MATCHES(NEW.local_path, '{e-(\d+)}'))[1]::INTEGER INTO espn_id
+    SELECT (REGEXP_MATCHES(NEW.local_path, '{e-(\d+)}'))[1]::INT INTO espn_id
     WHERE NEW.local_path ILIKE '%{e-%';
 
     -- Check for an existing record
@@ -53,6 +53,98 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- 1.3 Trigger function to propagate soft deletes from exp_experiments to related tables
+CREATE OR REPLACE FUNCTION propagate_soft_delete_experiments()
+RETURNS TRIGGER AS $$
+DECLARE
+    tables_with_experiment_id TEXT[] := ARRAY[
+        'exp_experiment_results',
+        'exp_experiment_videos',
+        'exp_experiment_test_cases',
+        'exp_experiment_segments',
+        'exp_experiment_prompt_terms',
+        'exp_tests',
+        'exp_test_prompt_terms'
+    ];
+    tables_with_test_id TEXT[] := ARRAY[
+        'exp_test_transcriptions',
+        'exp_test_transcription_segments',
+        'exp_test_transcription_words'
+    ];
+    table_name TEXT;
+    test_rec RECORD;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        -- Update tables that have experiment_id
+        FOREACH table_name IN ARRAY tables_with_experiment_id LOOP
+            EXECUTE format('UPDATE %I SET deleted_at = $1 WHERE experiment_id = $2 AND deleted_at IS NULL', table_name)
+            USING NEW.deleted_at, NEW.experiment_id;
+        END LOOP;
+
+        -- Update related tables that have test_id
+        FOR test_rec IN SELECT test_id FROM exp_tests WHERE experiment_id = NEW.experiment_id AND deleted_at IS NULL LOOP
+            FOREACH table_name IN ARRAY tables_with_test_id LOOP
+                EXECUTE format('UPDATE %I SET deleted_at = $1 WHERE test_id = $2 AND deleted_at IS NULL', table_name)
+                USING NEW.deleted_at, test_rec.test_id;
+            END LOOP;
+        END LOOP;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 1.4 Trigger function to propagate soft deletes from exp_test_prompts to related tables
+CREATE OR REPLACE FUNCTION propagate_soft_delete_test_prompts()
+RETURNS TRIGGER AS $$
+DECLARE
+    tables_with_test_id TEXT[] := ARRAY[
+        'exp_test_transcriptions',
+        'exp_test_transcription_segments',
+        'exp_test_transcription_words',
+        'exp_test_prompt_terms'
+    ];
+    table_name TEXT;
+    test_rec RECORD;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        -- Update exp_tests where test_prompt_id matches
+        EXECUTE 'UPDATE exp_tests SET deleted_at = $1 WHERE test_prompt_id = $2 AND deleted_at IS NULL'
+        USING NEW.deleted_at, NEW.test_prompt_id;
+
+        -- Update related tables that have test_id
+        FOR test_rec IN SELECT test_id FROM exp_tests WHERE test_prompt_id = NEW.test_prompt_id AND deleted_at IS NULL LOOP
+            FOREACH table_name IN ARRAY tables_with_test_id LOOP
+                EXECUTE format('UPDATE %I SET deleted_at = $1 WHERE test_id = $2 AND deleted_at IS NULL', table_name)
+                USING NEW.deleted_at, test_rec.test_id;
+            END LOOP;
+        END LOOP;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- 1.5 Trigger function to propagate soft deletes from exp_tests to related tables
+CREATE OR REPLACE FUNCTION propagate_soft_delete_tests()
+RETURNS TRIGGER AS $$
+DECLARE
+    tables_with_test_id TEXT[] := ARRAY[
+        'exp_test_transcriptions',
+        'exp_test_transcription_segments',
+        'exp_test_transcription_words'
+    ];
+    table_name TEXT;
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        -- Update tables that have test_id
+        FOREACH table_name IN ARRAY tables_with_test_id LOOP
+            EXECUTE format('UPDATE %I SET deleted_at = $1 WHERE test_id = $2 AND deleted_at IS NULL', table_name)
+            USING NEW.deleted_at, NEW.test_id;
+        END LOOP;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- ================================================
 -- 2. Table Definitions
 -- ================================================
@@ -64,10 +156,10 @@ CREATE TABLE IF NOT EXISTS prompt_terms (
     general_speech_score DECIMAL(3,2),
     impact_transcription_score DECIMAL(3,2),
     confusion_potential_score DECIMAL(3,2),
-    tokens INT,
+    tokens INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Trigger to update modified_at on prompt_terms
@@ -80,7 +172,7 @@ EXECUTE FUNCTION update_modified_at_column();
 CREATE TABLE IF NOT EXISTS audio_segments (
     segment_id SERIAL PRIMARY KEY,
     video_id VARCHAR(255) NOT NULL,
-    segment_number INT NOT NULL,
+    segment_number INTEGER NOT NULL,
     start_time FLOAT,
     end_time FLOAT,
     snr DECIMAL(5,2),
@@ -89,7 +181,7 @@ CREATE TABLE IF NOT EXISTS audio_segments (
     processed_audio_path VARCHAR(500),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT unique_video_segments UNIQUE (video_id, segment_number)
 );
 
@@ -108,7 +200,7 @@ CREATE TABLE IF NOT EXISTS exp_experiments (
     description TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Trigger to update modified_at on exp_experiments
@@ -119,15 +211,15 @@ EXECUTE FUNCTION update_modified_at_column();
 
 -- 2.3.2. Create exp_experiment_results Table
 CREATE TABLE IF NOT EXISTS exp_experiment_results (
-    experiment_id INT PRIMARY KEY REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
-    total_tests INT,
+    experiment_id INTEGER PRIMARY KEY REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
+    total_tests INTEGER,
     average_wer DECIMAL(5,2),
     average_snr DECIMAL(5,2),
     average_probability DECIMAL(5,4),
     analysis_notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Trigger to update modified_at on exp_experiment_results
@@ -138,11 +230,11 @@ EXECUTE FUNCTION update_modified_at_column();
 
 -- 2.3.3. Create exp_experiment_videos Table
 CREATE TABLE IF NOT EXISTS exp_experiment_videos (
-    experiment_id INT NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
+    experiment_id INTEGER NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
     video_id VARCHAR(500) NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (experiment_id, video_id)
 );
 
@@ -155,15 +247,15 @@ EXECUTE FUNCTION update_modified_at_column();
 -- 2.3.4. Create exp_experiment_test_cases Table
 CREATE TABLE IF NOT EXISTS exp_experiment_test_cases (
     test_case_id SERIAL PRIMARY KEY,
-    experiment_id INT NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
+    experiment_id INTEGER NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
     test_case_name VARCHAR(255) NOT NULL,
     description TEXT,
     prompt_template TEXT,
-    prompt_tokens INT,
+    prompt_tokens INTEGER,
     is_dynamic BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Trigger to update modified_at on exp_experiment_test_cases
@@ -174,12 +266,12 @@ EXECUTE FUNCTION update_modified_at_column();
 
 -- 2.3.5. Create exp_experiment_segments Table
 CREATE TABLE IF NOT EXISTS exp_experiment_segments (
-    experiment_id INT NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
-    segment_id INT NOT NULL REFERENCES audio_segments(segment_id) ON DELETE NO ACTION,
-    test_case_id INT NOT NULL REFERENCES exp_experiment_test_cases(test_case_id) ON DELETE NO ACTION,
+    experiment_id INTEGER NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
+    segment_id INTEGER NOT NULL REFERENCES audio_segments(segment_id) ON DELETE NO ACTION,
+    test_case_id INTEGER NOT NULL REFERENCES exp_experiment_test_cases(test_case_id) ON DELETE NO ACTION,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (experiment_id, segment_id)
 );
 
@@ -191,17 +283,17 @@ EXECUTE FUNCTION update_modified_at_column();
 
 -- 2.3.6. Create exp_experiment_prompt_terms Table
 CREATE TABLE IF NOT EXISTS exp_experiment_prompt_terms (
-    experiment_id INT NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
-    term VARCHAR(50) NOT NULL,
+    experiment_id INTEGER NOT NULL REFERENCES exp_experiments(experiment_id) ON DELETE NO ACTION,
+    term VARCHAR(50) NOT NULL REFERENCES prompt_terms(term) ON DELETE NO ACTION,
     in_game_usage_score_weighted DECIMAL(3,2),
     general_speech_score_weighted DECIMAL(3,2),
     impact_transcription_score_weighted DECIMAL(3,2),
     confusion_potential_score_weighted DECIMAL(3,2),
     final_score DECIMAL(3,2),
-    tokens INT,
+    tokens INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
+    deleted_at TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (experiment_id, term)
 );
 
@@ -216,10 +308,10 @@ CREATE TABLE IF NOT EXISTS exp_test_prompts (
     test_prompt_id SERIAL PRIMARY KEY,
     experiment_test_case_id INTEGER REFERENCES exp_experiment_test_cases(test_case_id),
     prompt TEXT,
-    prompt_tokens INT NOT NULL,
+    prompt_tokens INTEGER NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP
+    deleted_at TIMESTAMP WITH TIME ZONE
 );
 
 -- Unique when prompt is NOT NULL and record is not soft-deleted
@@ -259,7 +351,6 @@ CREATE INDEX idx_exp_tests_experiment_id ON exp_tests(experiment_id int4_ops);
 CREATE INDEX idx_exp_tests_segment_id ON exp_tests(segment_id int4_ops);
 CREATE INDEX idx_exp_tests_test_case_id ON exp_tests(test_case_id int4_ops);
 CREATE INDEX idx_exp_tests_test_prompt_id ON exp_tests(test_prompt_id int4_ops);
-CREATE UNIQUE INDEX exp_tests_pkey ON exp_tests(test_id int4_ops);
 
 -- Trigger to update modified_at on exp_tests
 CREATE TRIGGER trg_exp_tests_modified_at
@@ -275,14 +366,13 @@ CREATE TABLE exp_test_prompt_terms (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP WITH TIME ZONE,
-    CONSTRAINT exp_test_prompt_terms_pkey PRIMARY KEY (experiment_id, term, test_id)
+    PRIMARY KEY (experiment_id, term, test_id)
 );
 
 -- Indexes for exp_test_prompt_terms
 CREATE INDEX idx_exp_test_prompt_terms_experiment_id ON exp_test_prompt_terms(experiment_id int4_ops);
 CREATE INDEX idx_exp_test_prompt_terms_term ON exp_test_prompt_terms(term text_ops);
 CREATE INDEX idx_exp_test_prompt_terms_test_id ON exp_test_prompt_terms(test_id int4_ops);
-CREATE UNIQUE INDEX exp_test_prompt_terms_pkey ON exp_test_prompt_terms(experiment_id int4_ops,term text_ops,test_id int4_ops);
 CREATE UNIQUE INDEX unique_exp_test_prompt_terms ON exp_test_prompt_terms(experiment_id int4_ops,term text_ops,test_id int4_ops);
 
 -- Trigger to update modified_at on exp_test_prompt_terms
@@ -303,7 +393,6 @@ CREATE TABLE exp_test_transcriptions (
 
 -- Indexes for exp_test_transcriptions
 CREATE UNIQUE INDEX idx_exp_test_transcriptions_test_id ON exp_test_transcriptions(test_id int4_ops);
-CREATE UNIQUE INDEX exp_test_transcriptions_pkey ON exp_test_transcriptions(transcription_id int4_ops);
 
 -- Trigger to update modified_at on exp_test_transcriptions
 CREATE TRIGGER trg_exp_test_transcriptions_modified_at
@@ -329,7 +418,6 @@ CREATE TABLE exp_test_transcription_segments (
 CREATE INDEX idx_exp_test_transcription_segments_test_id ON exp_test_transcription_segments(test_id int4_ops);
 CREATE INDEX idx_exp_test_transcription_segments_segment_number ON exp_test_transcription_segments(segment_number int4_ops);
 CREATE UNIQUE INDEX idx_exp_test_transcription_segments_test_id_segment_number ON exp_test_transcription_segments(test_id int4_ops, segment_number int4_ops);
-CREATE UNIQUE INDEX exp_test_transcription_segments_pkey ON exp_test_transcription_segments(transcription_segment_id int4_ops);
 
 -- Trigger to update modified_at on exp_test_transcription_segments
 CREATE TRIGGER trg_exp_test_transcription_segments_modified_at
@@ -355,7 +443,6 @@ CREATE TABLE exp_test_transcription_words (
 CREATE INDEX idx_exp_test_transcription_words_test_id ON exp_test_transcription_words(test_id int4_ops);
 CREATE INDEX idx_exp_test_transcription_words_word_number ON exp_test_transcription_words(word_number int4_ops);
 CREATE UNIQUE INDEX idx_exp_test_transcription_words_test_id_word_number ON exp_test_transcription_words(test_id int4_ops, word_number int4_ops);
-CREATE UNIQUE INDEX exp_test_transcription_words_pkey ON exp_test_transcription_words(transcription_word_id int4_ops);
 
 -- Trigger to update modified_at on exp_test_transcription_words
 CREATE TRIGGER trg_exp_test_transcription_words_modified_at
@@ -367,8 +454,8 @@ CREATE TRIGGER trg_exp_test_transcription_words_modified_at
 
 -- 2.4.1. Create video_espn_mapping Table
 CREATE TABLE video_espn_mapping (
-    yt_id VARCHAR NOT NULL REFERENCES yt_metadata(video_id),
-    espn_id INTEGER NOT NULL,
+    yt_id VARCHAR NOT NULL UNIQUE REFERENCES yt_metadata(video_id),
+    espn_id INTEGER NOT NULL REFERENCES e_events(event_id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP WITH TIME ZONE,
@@ -390,7 +477,7 @@ FOR EACH ROW EXECUTE FUNCTION manage_video_espn_mapping();
 
 -- 2.5.1. Create e_teams table
 CREATE TABLE e_teams (
-    team_id SERIAL PRIMARY KEY,
+    team_id INTEGER PRIMARY KEY,
     display_name VARCHAR NOT NULL,
     abbreviation VARCHAR NOT NULL UNIQUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -428,19 +515,13 @@ EXECUTE FUNCTION update_modified_at_column();
 
 -- 2.5.3 Create e_games table
 CREATE TABLE e_games (
-    game_id SERIAL PRIMARY KEY,
-    video_id VARCHAR NOT NULL UNIQUE REFERENCES yt_metadata(video_id),
-    espn_id INT NOT NULL,
-    home_team_id INT REFERENCES e_teams(team_id),
-    away_team_id INT REFERENCES e_teams(team_id),
+    game_id INTEGER PRIMARY KEY REFERENCES e_events(event_id),
+    home_team_id INTEGER REFERENCES e_teams(team_id),
+    away_team_id INTEGER REFERENCES e_teams(team_id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP WITH TIME ZONE
 );
-
--- Indexes for e_games
-CREATE UNIQUE INDEX e_games_video_id_unique ON e_games(video_id);
-CREATE INDEX idx_e_games_espn_id ON e_games(video_id);
 
 -- Trigger to update modified_at on e_games
 CREATE TRIGGER trg_e_games_modified_at
@@ -451,9 +532,9 @@ EXECUTE FUNCTION update_modified_at_column();
 -- 2.5.4 Create e_game_players table
 CREATE TABLE e_game_players (
     game_player_id SERIAL PRIMARY KEY,
-    game_id INT REFERENCES e_games(game_id),
-    player_id INT REFERENCES e_players(player_id),
-    team_id INT REFERENCES e_teams(team_id),
+    game_id INTEGER NOT NULL REFERENCES e_games(game_id),
+    player_id INTEGER REFERENCES e_players(player_id),
+    team_id INTEGER REFERENCES e_teams(team_id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     modified_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP WITH TIME ZONE,
@@ -477,18 +558,31 @@ EXECUTE FUNCTION update_modified_at_column();
 -- ================================================
 
 -- 3.1. Trigger to propagate soft deletes from exp_experiments to related tables
+DROP TRIGGER IF EXISTS trg_exp_experiments_soft_delete ON exp_experiments;
+
 CREATE TRIGGER trg_exp_experiments_soft_delete
 AFTER UPDATE ON exp_experiments
 FOR EACH ROW
 WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
-EXECUTE FUNCTION propagate_soft_delete_to_related_tables_exp();
+EXECUTE FUNCTION propagate_soft_delete_experiments();
 
 -- 3.2. Trigger to propagate soft deletes from exp_test_prompts to related tables
+DROP TRIGGER IF EXISTS trg_exp_test_prompts_soft_delete ON exp_test_prompts;
+
 CREATE TRIGGER trg_exp_test_prompts_soft_delete
 AFTER UPDATE ON exp_test_prompts
 FOR EACH ROW
 WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
-EXECUTE FUNCTION propagate_soft_delete_to_related_tables_exp();
+EXECUTE FUNCTION propagate_soft_delete_test_prompts();
+
+-- 3.3. Trigger to propagate soft deletes from exp_tests to related tables
+DROP TRIGGER IF EXISTS trg_exp_tests_soft_delete ON exp_tests;
+
+CREATE TRIGGER trg_exp_tests_soft_delete
+AFTER UPDATE ON exp_tests
+FOR EACH ROW
+WHEN (OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL)
+EXECUTE FUNCTION propagate_soft_delete_tests();
 
 -- ================================================
 -- 4. Index Definitions

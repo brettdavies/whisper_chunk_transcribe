@@ -1,11 +1,11 @@
 # Standard Libraries
 import os
 import psycopg2
-from psycopg2 import pool, extras
-from typing import Any, Dict, List, Optional, Union
+from psycopg2 import pool
 from contextlib import contextmanager
 from psycopg2.extras import DictCursor
 from sshtunnel import SSHTunnelForwarder
+from typing import Any, Dict, List, Optional, Union
 
 # Logging and Configuration
 from loguru import logger
@@ -180,27 +180,6 @@ class DatabaseOperations(metaclass=SingletonMeta):
                 logger.debug(f"[{worker_name}] Transaction rolled back due to error.")
 
             return None
-
-    def get_prompt_terms(self) -> List[str]:
-        select_query = """
-            SELECT term FROM prompt_terms;
-        """
-        with self.get_db_connection(None) as conn:
-            try:
-                with conn.cursor() as cursor:
-                    logger.debug("Fetching prompt terms from the database.")
-
-                    # Execute the query
-                    cursor.execute(select_query)
-                    records = cursor.fetchall()
-                    logger.debug(f"Retrieved {len(records)} prompt term records from the database.")
-
-                    # Extract 'term' from each record
-                    return [record[0] for record in records]
-
-            except Exception as ex:
-                logger.error(f"Error in get_prompt_terms: {ex}")
-                raise
 
     def set_prompt_token_length(self, prompt: str, token_length: int) -> None:
         update_query = """
