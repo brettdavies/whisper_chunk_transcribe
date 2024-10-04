@@ -8,6 +8,8 @@
 - **Environment-Based Configuration**: The module loads database credentials and configuration details from environment variables using `dotenv`, keeping sensitive information out of the codebase and supporting environment-specific configurations.
 - **Error Handling and Logging**: The module integrates with the `loguru` logging library to provide detailed logging of database operations, facilitating easier debugging and monitoring.
 
+---
+
 ## Module Overview
 
 The `database.py` module is responsible for managing the connection to the PostgreSQL database, providing secure access via SSH tunneling and efficient connection handling through connection pooling. It includes functionalities for executing database queries, managing transactions, and handling the results of queries.

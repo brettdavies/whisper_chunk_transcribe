@@ -1,4 +1,4 @@
-# README for the Whisper Chunk Transcribe code
+# Whisper Chunk Transcribe
 
 ## Introduction
 
@@ -20,25 +20,42 @@ The system is composed of several key components:
 - **Robust Error Handling**: The system includes extensive error handling mechanisms, ensuring the smooth execution of processes and providing detailed error reports for debugging.
 - **Optimized Audio Processing**: The audio processing components are optimized for performance, including enhancements to reduce processing time without sacrificing accuracy.
 
-## Architecture
+## Prerequisites
 
-The system follows a modular architecture where each module serves a specific role. The following are the primary modules:
+Before using `yt_dlp_async`, ensure that you have the following prerequisites installed:
 
-1. **Audio Processing [`audio_processor.py`](/whisper_chunk_transcribe/whisper_chunk_transcribe/audio_processor.py)([Docs](/whisper_chunk_transcribe/docs/audio_processor.md))**:
+- **Python 3.12 or higher**
+- **Poetry**
+- **yt-dlp**
+- **Access to a PostgreSQL database**
 
-   - Prepares audio data for transcription by normalizing, converting, and validating files.
-   
-2. **Transcription Workflow [`transcription_processor.py`](/whisper_chunk_transcribe/whisper_chunk_transcribe/transcription_processor.py)([Docs](/whisper_chunk_transcribe/docs/transcription_processor.md)), [`transcription_wrapper.py`](/whisper_chunk_transcribe/whisper_chunk_transcribe/transcription_wrapper.py)([Docs](/whisper_chunk_transcribe/docs/transcription_wrapper.md))**:
-   - Manages the transcription of audio data, integrating with different transcription engines and handling pre- and post-processing tasks.
+## Documentation
 
-3. **Experimentation [`experiment_runner.py`](/whisper_chunk_transcribe/whisper_chunk_transcribe/experiment_runner.py)([Docs](/whisper_chunk_transcribe/docs/experiment_runner.md))**:
-   - Provides tools to set up and execute experiments involving audio data and transcription engines.
+Detailed documentation for each module is available in the `docs` directory:
 
-4. **Helper and Utility Modules [`helper_classes.py`](/whisper_chunk_transcribe/whisper_chunk_transcribe/helper_classes.py)([Class Docs](/whisper_chunk_transcribe/docs/helper_classes.md), [Script Docs](/whisper_chunk_transcribe/docs/helper_scripts.md)), [`utils.py`](/whisper_chunk_transcribe/whisper_chunk_transcribe/utils.py)([Docs](/whisper_chunk_transcribe/docs/utils.md))**:
-   - Offers general-purpose classes and utility functions to assist with various tasks across the system.
+- [audio_processor.py](docs/audio_processor.md): Provides functions for processing audio files, including loading, transforming, and saving audio data for further analysis or transcription.
 
-5. **Database Management [`database.py`](/whisper_chunk_transcribe/whisper_chunk_transcribe/database.py)([Docs](/whisper_chunk_transcribe/docs/database.md))**:
-   - Handles database operations such as saving and retrieving transcription data and experiment results.
+- [database.py](docs/database.md): Manages database operations, including establishing SSH tunnels, handling database connections, and executing queries using a singleton pattern for efficient connection management.
+
+- [db_populate_data.sql](docs/db_populate_data.md): SQL script for populating the database with initial data, including sample records, default values, and test data for development purposes.
+
+- [db_schema.sql](docs/db_schema.md): Defines the database schema, including tables, relationships, indexes, constraints, and triggers to enforce data integrity and support application functionality.
+
+- [experiment_runner.py](docs/experiment_runner.md): Orchestrates the execution of experiments, managing test cases, collecting results, and storing data for analysis.
+
+- [helper_classes.py](docs/helper_classes.md): Provides helper classes and data structures used throughout the application to facilitate data handling and processing.
+
+- [helper_scripts.py](docs/helper_scripts.md): Contains utility scripts for tasks such as data migration, cleanup, batch processing, and other auxiliary operations.
+
+- [prepare_audio.py](docs/prepare_audio.md): Prepares audio files for processing, including splitting, normalization, noise reduction, and feature extraction.
+
+- [process_audio_wrapper.py](docs/process_audio_wrapper.md): Provides a high-level interface for processing audio data, wrapping lower-level functions to handle audio processing tasks efficiently.
+
+- [transcription_processor.py](docs/transcription_processor.md): Manages transcription of audio data, including sending audio to transcription services, processing responses, and handling errors.
+
+- [transcription_wrapper.py](docs/transcription_wrapper.md): Provides a wrapper for the transcription process, managing the flow of audio data through transcription and post-processing steps.
+
+- [utils.py](docs/utils.md): Offers utility functions and helpers used across the application, such as logging setup, configuration parsing, and common data transformations.
 
 ## Workflow
 
@@ -78,10 +95,3 @@ The project relies on a set of environment variables to configure various aspect
 - `DB_NAME`: The name of the database to connect to.
 
 Ensure these environment variables are properly set in your system before running the project to avoid misconfigurations and ensure smooth execution of processes.
-
-## Attention to Detail
-
-The project has been designed with a strong emphasis on code quality and maintainability:
-- **Docstrings and Comments**: All classes and methods are well-documented, providing clear guidance on their purpose and usage.
-- **Error Handling**: Extensive checks and balances ensure that the system can handle a variety of edge cases, providing users with meaningful feedback in case of errors.
-- **Code Efficiency**: The codebase includes numerous optimizations aimed at reducing overhead and improving performance.
