@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 1. Rebuild the whisper_chunk_transcribe package
-poetry build -C ~/github/ucsd-ml-ai-capstone/whisper_chunk_transcribe/ 
+poetry build -C ~/github/whisper_chunk_transcribe/ 
 
 # Ensure the build command finishes before continuing
 if [ $? -ne 0 ]; then
@@ -22,13 +22,13 @@ deactivate
 source ~/Documents/.venv/bin/activate
 
 # 6. Install the wheel file
-pip install ~/github/ucsd-ml-ai-capstone/whisper_chunk_transcribe/dist/whisper_chunk_transcribe-0.1.0-py3-none-any.whl
+pip install ~/github/whisper_chunk_transcribe/dist/whisper_chunk_transcribe-0.1.0-py3-none-any.whl
 
 # 7. Extract the tar.gz file to /home/bigdaddy/Documents
-tar -xzvf ~/github/ucsd-ml-ai-capstone/whisper_chunk_transcribe/dist/whisper_chunk_transcribe-0.1.0.tar.gz -C ~/Documents
+tar -xzvf ~/github/whisper_chunk_transcribe/dist/whisper_chunk_transcribe-0.1.0.tar.gz -C ~/Documents
 
 # 8. Copy the .env file to the extracted directory
-cp ~/github/ucsd-ml-ai-capstone/whisper_chunk_transcribe/.env ~/Documents/whisper_chunk_transcribe-0.1.0
+cp ~/github/whisper_chunk_transcribe/.env ~/Documents/whisper_chunk_transcribe-0.1.0
 
 # 9. Change to the whisper_chunk_transcribe-0.1.0 directory
 cd ~/Documents/whisper_chunk_transcribe-0.1.0

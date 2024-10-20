@@ -2,7 +2,6 @@
 data/
 
 # PostgreSQL
-*.sql
 *.dump
 *.sql.gz
 *.pg_dump
@@ -18,7 +17,6 @@ __pycache__/
 *.sqlite3
 *.db
 *.log
-*.env
 
 # Virtual environment
 venv/
