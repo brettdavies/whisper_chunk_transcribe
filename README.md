@@ -1,5 +1,7 @@
 # Whisper Chunk Transcribe
 
+> **Project Overview:** See [PROJECT.md](PROJECT.md) for a high-level overview, achievements, and technical highlights.
+
 ## Introduction
 
 This poetry application provides an advanced framework for processing audio data, running experiments on audio transcriptions, and managing related resources such as databases and utility functions. The framework is designed with extensibility, flexibility, and performance in mind, allowing users to seamlessly integrate audio transcription and experiment workflows.
