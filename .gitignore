@@ -1,5 +1,9 @@
 # Project specific
 data/
+.env
+
+# Build artifacts
+dist/
 
 # PostgreSQL
 *.dump
